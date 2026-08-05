@@ -1,0 +1,12 @@
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pain.001.001.11">
+  <CstmrCdtTrfInitn>
+    <GrpHdr>
+      <MsgId>MSG-001</MsgId>
+      <CreDtTm>2026-07-30T12:00:00Z</CreDtTm>
+      <NbOfTxs>0</NbOfTxs>
+      <InitgPty>
+        <Nm>IOL Example</Nm>
+      </InitgPty>
+    </GrpHdr>
+  </CstmrCdtTrfInitn>
+</Document>

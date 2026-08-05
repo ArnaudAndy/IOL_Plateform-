@@ -1,0 +1,31 @@
+# Outils locaux d'agents IA — configuration propre a la machine
+.agents/
+.claude/
+.codex/
+
+# Espace de travail temporaire
+.tmp/
+
+# Archives et sauvegardes locales
+*.zip
+*.bkp
+.$*
+
+# Local secrets
+**/.env
+**/.env.local
+**/.env.*.local
+!**/.env.example
+!**/.env.production.example
+
+# Build and runtime output
+**/target/
+**/dist/
+**/node_modules/
+**/__pycache__/
+*.log
+*.pid
+backend/backups/
+backend/secrets/
+backend/keycloak/generated/
+reports/

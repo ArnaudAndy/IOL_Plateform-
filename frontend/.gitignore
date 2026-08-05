@@ -1,0 +1,10 @@
+node_modules
+dist
+tests/artifacts
+dist-ssr
+.tmp
+*.local
+.env.local
+.env.*.local
+*.log
+.DS_Store

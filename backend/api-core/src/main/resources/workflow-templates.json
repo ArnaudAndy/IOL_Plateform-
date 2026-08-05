@@ -1,0 +1,331 @@
+[
+  {
+    "id": "jdbc-standard-v1",
+    "name": "Ingestion depuis une base",
+    "description": "Lecture JDBC, normalisation Silver et consolidation Gold.",
+    "category": "DATABASE",
+    "version": "1.0.0",
+    "workflow": {
+      "workflowName": "",
+      "description": "",
+      "protocol": "POSTGRES",
+      "direction": "INTERNAL",
+      "priority": 5,
+      "active": false,
+      "schedule": {
+        "enabled": false,
+        "frequency": "DAILY",
+        "time": "00:00"
+      },
+      "sources": [
+        {
+          "source_name": "POSTGRES",
+          "config": {
+            "target_table": "bronze_source",
+            "load_mode": "FULL",
+            "write_mode": "append",
+            "jdbc_partitioning_enabled": false,
+            "partition_count": 4,
+            "partition_parallelism": 4,
+            "jdbc_fetch_size": 1000,
+            "transport_mode": "AUTO",
+            "bulk_load_strategy": "AUTO",
+            "source_config": {
+              "query": ""
+            },
+            "fields": [],
+            "silver_config": {
+              "enabled": true,
+              "execution_engine": "SQL",
+              "target_table_silver": "silver_source",
+              "elt_scripts_silver": ""
+            }
+          }
+        }
+      ],
+      "gold_config_global": {
+        "enabled": true,
+        "input_layer": "SILVER",
+        "execution_engine": "SQL",
+        "target_table_gold": "gold_source",
+        "elt_scripts_gold": ""
+      }
+    }
+  },
+  {
+    "id": "file-controlled-v1",
+    "name": "Ingestion de fichier controle",
+    "description": "Fichier analyse en quarantaine, puis Bronze, Silver et Gold.",
+    "category": "FILE",
+    "version": "1.0.0",
+    "workflow": {
+      "workflowName": "",
+      "description": "",
+      "protocol": "CSV",
+      "direction": "INTERNAL",
+      "priority": 5,
+      "active": false,
+      "schedule": {
+        "enabled": false,
+        "frequency": "DAILY",
+        "time": "00:00"
+      },
+      "sources": [
+        {
+          "source_name": "CSV",
+          "config": {
+            "file_path": "",
+            "target_table": "bronze_file",
+            "load_mode": "FULL",
+            "write_mode": "append",
+            "transport_mode": "AUTO",
+            "source_config": {
+              "delimiter": ",",
+              "encoding": "UTF-8"
+            },
+            "fields": [],
+            "silver_config": {
+              "enabled": true,
+              "execution_engine": "SQL",
+              "target_table_silver": "silver_file",
+              "elt_scripts_silver": ""
+            }
+          }
+        }
+      ],
+      "gold_config_global": {
+        "enabled": true,
+        "input_layer": "SILVER",
+        "execution_engine": "SQL",
+        "target_table_gold": "gold_file",
+        "elt_scripts_gold": ""
+      }
+    }
+  },
+  {
+    "id": "interop-inbound-v1",
+    "name": "Reception interoperable",
+    "description": "Reception OpenHIM normalisee vers le pivot IOL.",
+    "category": "INTEROPERABILITY",
+    "version": "1.0.0",
+    "workflow": {
+      "workflowName": "",
+      "description": "",
+      "protocol": "PUSH",
+      "direction": "INBOUND",
+      "priority": 3,
+      "active": false,
+      "schedule": {
+        "enabled": false
+      },
+      "sources": [
+        {
+          "source_name": "PUSH",
+          "config": {
+            "target_table": "bronze_interop",
+            "load_mode": "FULL",
+            "write_mode": "append",
+            "fields": [],
+            "source_config": {},
+            "silver_config": {
+              "enabled": true,
+              "execution_engine": "SQL",
+              "target_table_silver": "silver_interop",
+              "elt_scripts_silver": ""
+            }
+          }
+        }
+      ],
+      "gold_config_global": {
+        "enabled": true,
+        "input_layer": "SILVER",
+        "execution_engine": "SQL",
+        "target_table_gold": "gold_interop",
+        "elt_scripts_gold": ""
+      }
+    }
+  },
+  {
+    "id": "multi-source-consolidation-v1",
+    "name": "Consolidation multi-source",
+    "description": "Deux sources independantes normalisees avant une jointure Gold.",
+    "category": "MULTI_SOURCE",
+    "version": "1.0.0",
+    "workflow": {
+      "workflowName": "",
+      "description": "",
+      "protocol": "MULTI",
+      "direction": "INTERNAL",
+      "priority": 5,
+      "active": false,
+      "schedule": {
+        "enabled": false,
+        "frequency": "DAILY",
+        "time": "00:00"
+      },
+      "sources": [
+        {
+          "source_name": "POSTGRES",
+          "config": {
+            "target_table": "bronze_source_a",
+            "load_mode": "FULL",
+            "write_mode": "append",
+            "transport_mode": "AUTO",
+            "source_config": {
+              "query": ""
+            },
+            "fields": [],
+            "silver_config": {
+              "enabled": true,
+              "execution_engine": "SQL",
+              "target_table_silver": "silver_source_a",
+              "elt_scripts_silver": ""
+            }
+          }
+        },
+        {
+          "source_name": "MYSQL",
+          "config": {
+            "target_table": "bronze_source_b",
+            "load_mode": "FULL",
+            "write_mode": "append",
+            "transport_mode": "AUTO",
+            "source_config": {
+              "query": ""
+            },
+            "fields": [],
+            "silver_config": {
+              "enabled": true,
+              "execution_engine": "SQL",
+              "target_table_silver": "silver_source_b",
+              "elt_scripts_silver": ""
+            }
+          }
+        }
+      ],
+      "gold_config_global": {
+        "enabled": true,
+        "input_layer": "SILVER",
+        "execution_engine": "SQL",
+        "target_table_gold": "gold_consolidated",
+        "elt_scripts_gold": ""
+      }
+    }
+  },
+  {
+    "id": "interop-fhir-r4-v1",
+    "name": "FHIR R4 vers IOL",
+    "description": "Bundle ou ressource FHIR R4 valide vers Bronze JSON natif.",
+    "category": "INTEROPERABILITY",
+    "version": "1.0.0",
+    "workflow": {
+      "workflowName": "",
+      "description": "",
+      "protocol": "PUSH",
+      "direction": "INBOUND",
+      "standardId": "std_pack_fhir_r4",
+      "priority": 3,
+      "active": false,
+      "schedule": {"enabled": false},
+      "sources": [
+        {
+          "source_name": "PUSH",
+          "config": {
+            "target_table": "bronze_fhir_r4",
+            "load_mode": "FULL",
+            "write_mode": "append",
+            "fields": [
+              "fhir_resource_type",
+              "fhir_id",
+              "fhir_profiles",
+              "fhir_resource_json",
+              "fhir_bundle_type",
+              "fhir_entry_index",
+              "fhir_full_url",
+              "fhir_request_method",
+              "fhir_request_url"
+            ],
+            "source_config": {},
+            "silver_config": {"enabled": false}
+          }
+        }
+      ],
+      "gold_config_global": {"enabled": false}
+    }
+  },
+  {
+    "id": "interop-iso20022-v1",
+    "name": "ISO 20022 vers IOL",
+    "description": "Messages MX ISO 20022 valides vers Bronze JSON natif.",
+    "category": "INTEROPERABILITY",
+    "version": "1.0.0",
+    "workflow": {
+      "workflowName": "",
+      "description": "",
+      "protocol": "PUSH",
+      "direction": "INBOUND",
+      "standardId": "std_pack_iso20022_2025",
+      "priority": 2,
+      "active": false,
+      "schedule": {"enabled": false},
+      "sources": [
+        {
+          "source_name": "PUSH",
+          "config": {
+            "target_table": "bronze_iso20022",
+            "load_mode": "FULL",
+            "write_mode": "append",
+            "fields": [
+              "iso20022_message_definition_id",
+              "iso20022_business_domain",
+              "iso20022_namespace",
+              "iso20022_payload_xml",
+              "iso20022_payload_json"
+            ],
+            "source_config": {},
+            "silver_config": {"enabled": false}
+          }
+        }
+      ],
+      "gold_config_global": {"enabled": false}
+    }
+  },
+  {
+    "id": "interop-edfi-v1",
+    "name": "Ed-Fi vers IOL",
+    "description": "Ressources Ed-Fi JSON ou NDJSON vers Bronze JSON natif.",
+    "category": "INTEROPERABILITY",
+    "version": "1.0.0",
+    "workflow": {
+      "workflowName": "",
+      "description": "",
+      "protocol": "PUSH",
+      "direction": "INBOUND",
+      "standardId": "std_pack_edfi_6_1",
+      "priority": 3,
+      "active": false,
+      "schedule": {"enabled": false},
+      "sources": [
+        {
+          "source_name": "PUSH",
+          "config": {
+            "target_table": "bronze_edfi",
+            "load_mode": "FULL",
+            "write_mode": "append",
+            "fields": [
+              "edfi_resource",
+              "edfi_id",
+              "edfi_etag",
+              "edfi_data_standard_version",
+              "edfi_api_version",
+              "edfi_payload_json"
+            ],
+            "source_config": {},
+            "silver_config": {"enabled": false}
+          }
+        }
+      ],
+      "gold_config_global": {"enabled": false}
+    }
+  }
+]

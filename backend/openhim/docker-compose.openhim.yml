@@ -1,0 +1,345 @@
+# =============================================================================
+# IOL ETL Platform - OpenHIM infrastructure (Phase 3.0)
+# =============================================================================
+#
+# Run from backend/ after the main IOL stack has created its network:
+#   docker compose --env-file openhim/.env -f openhim/docker-compose.openhim.yml up -d
+#
+# No OpenHIM port is published here. Nginx is the only external entrypoint:
+#   /openhim-console/ -> openhim-console:80
+#   /openhim-api/     -> openhim-core:8080
+#   /interop/*        -> openhim-core router
+#
+# =============================================================================
+
+services:
+
+  openhim-mongo:
+    image: mongo:4.4
+    container_name: iol-openhim-mongo
+    restart: unless-stopped
+    command: ["mongod", "--replSet", "rs-openhim", "--bind_ip_all"]
+    expose:
+      - "27017"
+    volumes:
+      - openhim_mongo_data:/data/db
+    networks:
+      - iol-internal
+    healthcheck:
+      test: ["CMD-SHELL", "mongo --quiet --eval \"rs.isMaster().ismaster\" | grep -q true"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  openhim-mongo-init:
+    image: mongo:4.4
+    container_name: iol-openhim-mongo-init
+    # One-shot init: exits with code 0 after the replica set is ready.
+    # openhim-core waits for successful completion; this container is not meant to stay running.
+    restart: "no"
+    depends_on:
+      openhim-mongo:
+        condition: service_started
+    networks:
+      - iol-internal
+    command:
+      - bash
+      - -lc
+      - |
+        attempts=0
+        until mongo --host openhim-mongo --quiet --eval "db.adminCommand({ ping: 1 }).ok" >/dev/null 2>&1; do
+          attempts=$$((attempts + 1))
+          if [ "$$attempts" -ge 60 ]; then
+            echo "MongoDB did not become reachable in time."
+            exit 1
+          fi
+
+          sleep 2
+        done
+
+        if ! mongo --host openhim-mongo --quiet --eval '
+          const expectedHost = "openhim-mongo:27017";
+          try {
+            const status = rs.status();
+            const currentHost = status.members && status.members[0] && status.members[0].name;
+            if (currentHost !== expectedHost) {
+              const cfg = rs.conf();
+              cfg.members[0].host = expectedHost;
+              rs.reconfig(cfg, { force: true });
+            }
+          } catch (error) {
+            rs.initiate({
+              _id: "rs-openhim",
+              members: [{ _id: 0, host: expectedHost }]
+            });
+          }
+        '; then
+          echo "MongoDB replica set initialization failed."
+          exit 1
+        fi
+
+        attempts=0
+        until mongo --host openhim-mongo --quiet --eval "rs.isMaster().ismaster" | grep -q true; do
+          attempts=$$((attempts + 1))
+          if [ "$$attempts" -ge 60 ]; then
+            echo "MongoDB replica set did not elect a primary in time."
+            exit 1
+          fi
+
+          sleep 2
+        done
+
+  openhim-core:
+    # IOL extends the pinned upstream image with a narrow privacy fix: OpenHIM
+    # v8.5.0 otherwise keeps route/orchestration bodies even when the channel
+    # has requestBody=false and responseBody=false.
+    build:
+      context: ./openhim-core-privacy
+      dockerfile: Dockerfile
+    image: iol/openhim-core:v8.5.0-privacy
+    container_name: iol-openhim-core
+    restart: unless-stopped
+    expose:
+      - "8080"  # Core API, HTTPS self-signed inside the Docker network
+      - "5000"  # Transaction router, HTTPS
+      - "5001"  # Transaction router, HTTP behind Nginx TLS termination
+    environment:
+      NODE_ENV: "production"
+
+      # OpenHIM metadata store. Dedicated DB, separate from the IOL app MongoDB.
+      mongo_url: "mongodb://openhim-mongo:27017/openhim?replicaSet=rs-openhim"
+      mongo_atnaUrl: "mongodb://openhim-mongo:27017/openhim?replicaSet=rs-openhim"
+
+      # Core API and router behind Nginx.
+      api_port: "8080"
+      api_protocol: "https"
+      api_trustProxy: "true"
+      api_secureCookie: "${OPENHIM_API_SECURE_COOKIE:-false}"
+      router_httpPort: "5001"
+      router_httpsPort: "5000"
+      router_externalHostname: "${OPENHIM_PUBLIC_HOST:-localhost}"
+
+      # Auth methods available to channels and the console.
+      api_authenticationTypes: '["token","basic","openid","local"]'
+      authentication_enableMutualTLSAuthentication: "${OPENHIM_ENABLE_MTLS:-true}"
+      authentication_enableBasicAuthentication: "${OPENHIM_ENABLE_BASIC_AUTH:-true}"
+      authentication_enableCustomTokenAuthentication: "${OPENHIM_ENABLE_CUSTOM_TOKEN_AUTH:-false}"
+      authentication_enableJWTAuthentication: "${OPENHIM_ENABLE_JWT_AUTH:-false}"
+
+      openhimConsoleBaseUrl: "${OPENHIM_PUBLIC_PROTOCOL:-http}://${OPENHIM_PUBLIC_HOST:-localhost}:${OPENHIM_PUBLIC_PORT:-80}/openhim-console/"
+      alerts_consoleURL: "${OPENHIM_PUBLIC_PROTOCOL:-http}://${OPENHIM_PUBLIC_HOST:-localhost}:${OPENHIM_PUBLIC_PORT:-80}/openhim-console"
+      alerts_himInstance: "IOL OpenHIM"
+    depends_on:
+      openhim-mongo:
+        condition: service_healthy
+      openhim-mongo-init:
+        condition: service_completed_successfully
+    networks:
+      - iol-internal
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-check-certificate -qO- https://127.0.0.1:8080/heartbeat >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  openhim-console:
+    image: jembi/openhim-console:v1.18.2
+    container_name: iol-openhim-console
+    restart: unless-stopped
+    expose:
+      - "80"
+    environment:
+      OPENHIM_CONSOLE_PROTOCOL: "${OPENHIM_PUBLIC_PROTOCOL:-http}"
+      OPENHIM_CORE_MEDIATOR_HOSTNAME: "${OPENHIM_PUBLIC_HOST:-localhost}"
+      OPENHIM_MEDIATOR_API_PORT: "${OPENHIM_PUBLIC_PORT:-80}"
+      OPENHIM_CONSOLE_HOSTPATH: "${OPENHIM_CONSOLE_API_HOSTPATH:-openhim-api}"
+      OPENHIM_CONSOLE_SHOW_LOGIN: "true"
+      KC_OPENHIM_SSO_ENABLED: "${KC_OPENHIM_SSO_ENABLED:-false}"
+    depends_on:
+      openhim-core:
+        condition: service_healthy
+    networks:
+      - iol-internal
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  iol-mediator:
+    build:
+      context: ../iol-mediator
+      dockerfile: Dockerfile
+    container_name: iol-mediator
+    restart: unless-stopped
+    expose:
+      - "3000"
+    environment:
+      PORT: "3000"
+      MEDIATOR_HOST: "iol-mediator"
+      MEDIATOR_PATH: "/"
+      MEDIATOR_URN: "urn:mediator:iol-generic"
+      MEDIATOR_NAME: "IOL Generic Interop Mediator"
+      OPENHIM_API_URL: "https://openhim-core:8080"
+      OPENHIM_USERNAME: "${OPENHIM_MEDIATOR_USERNAME:-root@openhim.org}"
+      OPENHIM_PASSWORD: "${OPENHIM_MEDIATOR_PASSWORD:-openhim-password}"
+      OPENHIM_TRUST_SELF_SIGNED: "true"
+      MEDIATOR_HEARTBEAT_INTERVAL_MS: "${IOL_MEDIATOR_HEARTBEAT_INTERVAL_MS:-10000}"
+      MEDIATOR_REGISTRATION_RETRY_MS: "${IOL_MEDIATOR_REGISTRATION_RETRY_MS:-15000}"
+      IOL_API_BASE_URL: "http://api-core:8084"
+      IOL_INTERNAL_SECRET: "${INTEROP_INTERNAL_SECRET:-}"
+      IOL_DEFAULT_STANDARD_ID: "${IOL_DEFAULT_STANDARD_ID:-}"
+      IOL_DEFAULT_WORKFLOW_ID: "${IOL_DEFAULT_WORKFLOW_ID:-}"
+      IOL_DEFAULT_SOURCE_SYSTEM: "${IOL_DEFAULT_SOURCE_SYSTEM:-generic-json}"
+      IOL_DEFAULT_ADAPTER: "${IOL_DEFAULT_ADAPTER:-generic-json}"
+      IOL_INBOUND_AUTH_TYPE: "${IOL_INBOUND_AUTH_TYPE:-private}"
+      IOL_INBOUND_ALLOWED_ROLES: "${IOL_INBOUND_ALLOWED_ROLES:-iol-inbound}"
+      IOL_INBOUND_CLIENT_ID: "${IOL_INBOUND_CLIENT_ID:-}"
+      IOL_INBOUND_CLIENT_NAME: "${IOL_INBOUND_CLIENT_NAME:-IOL inbound system}"
+      IOL_INBOUND_CLIENT_PASSWORD: "${IOL_INBOUND_CLIENT_PASSWORD:-}"
+      IOL_MAX_INBOUND_BYTES: "${IOL_MAX_INBOUND_BYTES:-268435456}"
+      IOL_MAX_STREAM_BYTES: "${IOL_MAX_STREAM_BYTES:-10737418240}"
+      IOL_MAX_NDJSON_LINE_BYTES: "${IOL_MAX_NDJSON_LINE_BYTES:-134217728}"
+      IOL_STREAM_BATCH_ROWS: "${IOL_STREAM_BATCH_ROWS:-500}"
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+      APP_KAFKA_DLQ_TOPIC: "iol.pipeline.commands.dlq"
+      OPENHIM_EGRESS_BASE_URL: "${OPENHIM_EGRESS_BASE_URL:-}"
+      APP_KAFKA_OUTBOUND_TOPIC: "${APP_KAFKA_OUTBOUND_TOPIC:-iol.outbound.delivery}"
+      APP_KAFKA_OUTBOUND_STATUS_TOPIC: "${APP_KAFKA_OUTBOUND_STATUS_TOPIC:-iol.outbound.status}"
+      OUTBOUND_MAX_RETRIES: "${OUTBOUND_MAX_RETRIES:-3}"
+      OUTBOUND_RETRY_BACKOFF_MS: "${OUTBOUND_RETRY_BACKOFF_MS:-1000}"
+      OUTBOUND_DELIVERY_TIMEOUT_MS: "${OUTBOUND_DELIVERY_TIMEOUT_MS:-30000}"
+      OUTBOUND_DELIVERY_LEASE_SECONDS: "${OUTBOUND_DELIVERY_LEASE_SECONDS:-300}"
+      OUTBOUND_ALLOWED_HOSTS: "${OUTBOUND_ALLOWED_HOSTS:-openhim-core}"
+      OUTBOUND_ALLOW_PRIVATE_NETWORKS: "${OUTBOUND_ALLOW_PRIVATE_NETWORKS:-false}"
+      OUTBOUND_AUTH_SECRETS_JSON: '${OUTBOUND_AUTH_SECRETS_JSON:-{}}'
+    depends_on:
+      openhim-core:
+        condition: service_healthy
+    networks:
+      - iol-internal
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:3000/ready', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  iol-fhir-mediator:
+    build:
+      context: ../openhim-mediators
+      dockerfile: openhim-mediator-iol-fhir/Dockerfile
+    container_name: iol-fhir-mediator
+    restart: unless-stopped
+    expose:
+      - "3101"
+    environment:
+      SERVER_PORT: "3101"
+      MEDIATOR_HOST: "iol-fhir-mediator"
+      MEDIATOR_URN: "urn:mediator:iol-fhir-r4"
+      OPENHIM_API_URL: "http://nginx/openhim-api"
+      OPENHIM_USERNAME: "${OPENHIM_MEDIATOR_USERNAME:-root@openhim.org}"
+      OPENHIM_PASSWORD: "${OPENHIM_MEDIATOR_PASSWORD:-openhim-password}"
+      OPENHIM_REGISTRATION_ENABLED: "${OPENHIM_JAVA_MEDIATOR_REGISTRATION_ENABLED:-true}"
+      IOL_MEDIATOR_URL: "http://iol-mediator:3000"
+      IOL_FHIR_STANDARD_ID: "${IOL_FHIR_STANDARD_ID:-std_pack_fhir_r4}"
+      IOL_FHIR_WORKFLOW_ID: "${IOL_FHIR_WORKFLOW_ID:-}"
+      IOL_INBOUND_AUTH_TYPE: "${IOL_INBOUND_AUTH_TYPE:-private}"
+      IOL_INBOUND_ALLOWED_ROLES: "${IOL_INBOUND_ALLOWED_ROLES:-iol-inbound}"
+    depends_on:
+      iol-mediator:
+        condition: service_healthy
+    networks:
+      - iol-internal
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3101/actuator/health/readiness"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  iol-iso20022-mediator:
+    build:
+      context: ../openhim-mediators
+      dockerfile: openhim-mediator-iol-iso20022/Dockerfile
+    container_name: iol-iso20022-mediator
+    restart: unless-stopped
+    expose:
+      - "3102"
+    environment:
+      SERVER_PORT: "3102"
+      MEDIATOR_HOST: "iol-iso20022-mediator"
+      MEDIATOR_URN: "urn:mediator:iol-iso20022"
+      OPENHIM_API_URL: "http://nginx/openhim-api"
+      OPENHIM_USERNAME: "${OPENHIM_MEDIATOR_USERNAME:-root@openhim.org}"
+      OPENHIM_PASSWORD: "${OPENHIM_MEDIATOR_PASSWORD:-openhim-password}"
+      OPENHIM_REGISTRATION_ENABLED: "${OPENHIM_JAVA_MEDIATOR_REGISTRATION_ENABLED:-true}"
+      IOL_MEDIATOR_URL: "http://iol-mediator:3000"
+      IOL_ISO20022_STANDARD_ID: "${IOL_ISO20022_STANDARD_ID:-std_pack_iso20022_2025}"
+      IOL_ISO20022_WORKFLOW_ID: "${IOL_ISO20022_WORKFLOW_ID:-}"
+      ISO20022_ALLOWED_FAMILIES: "${ISO20022_ALLOWED_FAMILIES:-}"
+      IOL_INBOUND_AUTH_TYPE: "${IOL_INBOUND_AUTH_TYPE:-private}"
+      IOL_INBOUND_ALLOWED_ROLES: "${IOL_INBOUND_ALLOWED_ROLES:-iol-inbound}"
+    depends_on:
+      iol-mediator:
+        condition: service_healthy
+    networks:
+      - iol-internal
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3102/actuator/health/readiness"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  iol-edfi-mediator:
+    build:
+      context: ../openhim-mediators
+      dockerfile: openhim-mediator-iol-edfi/Dockerfile
+    container_name: iol-edfi-mediator
+    restart: unless-stopped
+    expose:
+      - "3103"
+    environment:
+      SERVER_PORT: "3103"
+      MEDIATOR_HOST: "iol-edfi-mediator"
+      MEDIATOR_URN: "urn:mediator:iol-edfi"
+      OPENHIM_API_URL: "http://nginx/openhim-api"
+      OPENHIM_USERNAME: "${OPENHIM_MEDIATOR_USERNAME:-root@openhim.org}"
+      OPENHIM_PASSWORD: "${OPENHIM_MEDIATOR_PASSWORD:-openhim-password}"
+      OPENHIM_REGISTRATION_ENABLED: "${OPENHIM_JAVA_MEDIATOR_REGISTRATION_ENABLED:-true}"
+      IOL_MEDIATOR_URL: "http://iol-mediator:3000"
+      IOL_EDFI_STANDARD_ID: "${IOL_EDFI_STANDARD_ID:-std_pack_edfi_6_1}"
+      IOL_EDFI_WORKFLOW_ID: "${IOL_EDFI_WORKFLOW_ID:-}"
+      EDFI_DATA_STANDARD_VERSION: "${EDFI_DATA_STANDARD_VERSION:-6.1.0}"
+      EDFI_API_VERSION: "${EDFI_API_VERSION:-8}"
+      IOL_INBOUND_AUTH_TYPE: "${IOL_INBOUND_AUTH_TYPE:-private}"
+      IOL_INBOUND_ALLOWED_ROLES: "${IOL_INBOUND_ALLOWED_ROLES:-iol-inbound}"
+    depends_on:
+      iol-mediator:
+        condition: service_healthy
+    networks:
+      - iol-internal
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3103/actuator/health/readiness"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+volumes:
+  openhim_mongo_data:
+
+networks:
+  iol-internal:
+    external: true
+    name: "${IOL_DOCKER_NETWORK:-backend_iol-internal}"

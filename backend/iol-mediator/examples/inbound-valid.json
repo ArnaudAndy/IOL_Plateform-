@@ -1,0 +1,6 @@
+{
+  "patientId": "P001",
+  "birthDate": "1990-05-20",
+  "status": "ACTIVE",
+  "riskScore": 0.82
+}

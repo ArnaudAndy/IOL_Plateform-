@@ -1,0 +1,59 @@
+{
+  "standard": {
+    "name": "CUSTOM_PATIENT_V1",
+    "description": "Generic JSON patient message used to validate IOL INBOUND interoperability.",
+    "domain": "CUSTOM",
+    "version": "1.0",
+    "status": "ACTIVE"
+  },
+  "terms": [
+    {
+      "standardId": "<created-standard-id>",
+      "termName": "patient_id",
+      "description": "Neutral IOL patient identifier.",
+      "dataType": "STRING",
+      "minLength": 3,
+      "maxLength": 20,
+      "required": true,
+      "systemMappings": {
+        "generic-json": "patientId"
+      },
+      "exampleValue": "P001"
+    },
+    {
+      "standardId": "<created-standard-id>",
+      "termName": "birth_date",
+      "description": "Birth date in ISO local-date format.",
+      "dataType": "DATE",
+      "formatRule": "^\\d{4}-\\d{2}-\\d{2}$",
+      "required": true,
+      "systemMappings": {
+        "generic-json": "birthDate"
+      },
+      "exampleValue": "1990-05-20"
+    },
+    {
+      "standardId": "<created-standard-id>",
+      "termName": "status",
+      "description": "Patient status.",
+      "dataType": "STRING",
+      "required": true,
+      "enumValues": ["ACTIVE", "INACTIVE"],
+      "systemMappings": {
+        "generic-json": "status"
+      },
+      "exampleValue": "ACTIVE"
+    },
+    {
+      "standardId": "<created-standard-id>",
+      "termName": "risk_score",
+      "description": "Optional decimal risk score.",
+      "dataType": "DECIMAL",
+      "required": false,
+      "systemMappings": {
+        "generic-json": "riskScore"
+      },
+      "exampleValue": "0.82"
+    }
+  ]
+}

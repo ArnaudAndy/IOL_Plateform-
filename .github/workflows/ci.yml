@@ -1,0 +1,283 @@
+name: IOL CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  java:
+    name: Java - ${{ matrix.module }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - backend/api-core
+          - backend/pipeline-consumer
+          - backend/openhim-mediators
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+      - name: Tests et package
+        run: mvn --batch-mode --no-transfer-progress verify
+
+  mediator:
+    name: Mediateur OpenHIM
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/iol-mediator
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: backend/iol-mediator/package-lock.json
+      - run: npm ci
+      - name: Audit npm bloquant
+        run: npm audit --audit-level=high
+      - run: npm test
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Audit runtime bloquant
+        run: npm audit --omit=dev --audit-level=high
+      - name: Audit construction critique bloquant
+        run: npm audit --audit-level=critical
+      - name: Rapport complet des dependances de construction
+        continue-on-error: true
+        run: npm audit --audit-level=high --json > npm-audit-full.json
+      - name: Publier le rapport npm complet
+        if: always() && hashFiles('frontend/npm-audit-full.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-npm-audit
+          path: frontend/npm-audit-full.json
+          retention-days: 30
+      - run: npm run lint
+      - run: npm run test:mappers
+      - run: npm run build
+
+  python:
+    name: Moteurs Python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pipeline-consumer/requirements.txt
+      - name: Dependances de test
+        run: pip install pytest pip-audit pandas==2.2.3 SQLAlchemy==2.0.36 jsonschema==4.25.1
+      - name: Audit des dependances Python
+        run: pip-audit -r backend/pipeline-consumer/requirements.txt
+      - name: Tests
+        run: pytest -q tests test_mapping_engine.py
+      - name: Contrats de partage
+        run: python scripts/validate_contracts.py
+
+  compose:
+    name: Configuration et scripts d'exploitation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntaxe GitHub Actions
+        run: docker run --rm -v "${PWD}:/repo:ro" -w /repo rhysd/actionlint:1.7.7
+      - name: Syntaxe de tous les scripts d exploitation
+        run: find backend/ops backend/vault backend/keycloak -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+      - name: Stack principale
+        working-directory: backend
+        run: docker compose config --quiet
+      - name: Superposition de production
+        working-directory: backend
+        run: >-
+          docker compose
+          --profile bootstrap
+          --env-file .env.production.example
+          -f docker-compose.yml
+          -f docker-compose.production.yml
+          config --quiet
+      - name: Stack OpenHIM
+        working-directory: backend
+        run: >-
+          docker compose
+          --env-file .env.production.example
+          -f openhim/docker-compose.openhim.yml
+          -f openhim/docker-compose.openhim.production.yml
+          config --quiet
+      - name: Stack Vault HA et bootstrap
+        working-directory: backend/vault
+        run: docker compose --profile bootstrap -f docker-compose.vault-ha.yml config --quiet
+      - name: Realm Keycloak valide
+        run: python -m json.tool backend/keycloak/realm/iol-realm.json >/dev/null
+      - name: Invariants de securite production
+        run: python scripts/validate_production_security.py
+
+  image-build:
+    name: Construction - ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: api-core, context: backend/api-core, file: backend/api-core/Dockerfile}
+          - {name: pipeline-consumer, context: backend/pipeline-consumer, file: backend/pipeline-consumer/Dockerfile}
+          - {name: mediator, context: backend/iol-mediator, file: backend/iol-mediator/Dockerfile}
+          - {name: web, context: frontend, file: frontend/Dockerfile}
+          - {name: keycloak, context: backend/keycloak, file: backend/keycloak/Dockerfile}
+          - {name: mongodb, context: backend/mongodb, file: backend/mongodb/Dockerfile}
+          - {name: postgres, context: backend/postgres, file: backend/postgres/Dockerfile}
+          - {name: clamav-tls, context: backend/stunnel, file: backend/stunnel/Dockerfile}
+          - {name: openhim-core, context: backend/openhim/openhim-core-privacy, file: backend/openhim/openhim-core-privacy/Dockerfile}
+          - {name: mediator-fhir, context: backend/openhim-mediators, file: backend/openhim-mediators/openhim-mediator-iol-fhir/Dockerfile}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          push: false
+          cache-from: type=gha,scope=ci-${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=ci-${{ matrix.name }}
+
+  vendor-images:
+    name: Image tierce - ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - apache/spark:3.5.7-java17-python3
+          - clamav/clamav:1.4
+          - confluentinc/cp-kafka:8.2.2-1-ubi9
+          - hashicorp/vault:1.21.7
+          - jembi/openhim-console:v1.18.2
+          - mongo:8.2
+          - nginx:1.29-alpine
+          - rustfs/rustfs:1.0.0-beta.9
+    steps:
+      - name: Scan bloquant HIGH et CRITICAL
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ matrix.image }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+  codeql:
+    name: CodeQL - ${{ matrix.language }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [java-kotlin, javascript-typescript, python]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+      - uses: github/codeql-action/analyze@v3
+
+  secrets:
+    name: Detection de secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Gitleaks bloquant
+        run: >-
+          docker run --rm
+          -v "${PWD}:/repo:ro"
+          zricethezav/gitleaks:v8.27.2
+          detect --source=/repo --no-git --redact --exit-code=1
+
+  dependency-review:
+    name: Revue des dependances
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          deny-licenses: GPL-3.0, AGPL-3.0
+
+  trivy:
+    name: Vulnerabilites et configurations
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan bloquant
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: sarif
+          output: trivy-results.sarif
+      - name: Publier le rapport SARIF
+        if: always() && hashFiles('trivy-results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+
+  gate:
+    name: Porte de qualite
+    if: always()
+    needs: [java, mediator, frontend, python, compose, image-build, vendor-images, codeql, secrets, dependency-review, trivy]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuser toute verification en echec
+        env:
+          RESULTS: ${{ join(needs.*.result, ',') }}
+        run: |
+          case ",${RESULTS}," in
+            *,failure,*|*,cancelled,*) exit 1 ;;
+            *) exit 0 ;;
+          esac

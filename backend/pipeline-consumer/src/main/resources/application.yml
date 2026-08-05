@@ -1,0 +1,221 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  pipeline-consumer — configuration unique multi-OS
+# ───────────────────────────────────────────────────────────────────────────
+#  Bloc commun (toujours appliqué) + blocs par profil (linux / windows).
+#  Activer le profil au lancement :
+#     - Windows : --spring.profiles.active=windows  (ou SPRING_PROFILES_ACTIVE=windows)
+#     - Linux   : --spring.profiles.active=linux    (défaut si rien : voir spring.profiles.default)
+# ═══════════════════════════════════════════════════════════════════════════
+
+spring:
+  # Profil par défaut si aucun n'est précisé au lancement
+  profiles:
+    default: linux
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: ${KAFKA_CONSUMER_GROUP:iol-pipeline-consumer}
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      max-partition-fetch-bytes: 10485760
+      fetch-max-bytes: 10485760
+      max-poll-records: 1
+      max-poll-interval-ms: 3600000
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      max-request-size: 10485760
+      buffer-memory: 33554432
+    listener:
+      missing-topics-fatal: false
+      ack-mode: manual
+
+app:
+  kafka:
+    topics:
+      commands:
+        high:     ${APP_KAFKA_COMMANDS_HIGH_TOPIC:iol.pipeline.high}
+        default:  ${APP_KAFKA_COMMANDS_TOPIC:iol.pipeline.commands}
+        low:      ${APP_KAFKA_COMMANDS_LOW_TOPIC:iol.pipeline.low}
+      status:     ${APP_KAFKA_STATUS_TOPIC:iol.pipeline.status}
+      dlq:        ${APP_KAFKA_DLQ_TOPIC:iol.pipeline.commands.dlq}
+    consumer:
+      group: ${KAFKA_CONSUMER_GROUP:iol-pipeline-consumer}
+      concurrency: ${APP_KAFKA_CONSUMER_CONCURRENCY:3}
+    status:
+      heartbeat:
+        seconds: ${APP_KAFKA_STATUS_HEARTBEAT_SECONDS:5}
+
+  object-storage:
+    enabled: ${OBJECT_STORAGE_ENABLED:false}
+    endpoint: ${OBJECT_STORAGE_ENDPOINT:http://localhost:9000}
+    region: ${OBJECT_STORAGE_REGION:us-east-1}
+    bucket: ${OBJECT_STORAGE_BUCKET:iol-source-data}
+    access-key: ${OBJECT_STORAGE_ACCESS_KEY:}
+    secret-key: ${OBJECT_STORAGE_SECRET_KEY:}
+    cleanup:
+      enabled: ${OBJECT_STORAGE_CLEANUP_ENABLED:true}
+      failed-retention-hours: ${OBJECT_STORAGE_FAILED_RETENTION_HOURS:72}
+      scan-interval-ms: ${OBJECT_STORAGE_CLEANUP_SCAN_INTERVAL_MS:3600000}
+
+  execution-lock:
+    mode: ${EXECUTION_LOCK_MODE:POSTGRES}
+    jdbc-url: ${EXECUTION_LOCK_JDBC_URL:jdbc:postgresql://localhost:5432/lakehouse}
+    username: ${EXECUTION_LOCK_USERNAME:etl_user}
+    password: ${EXECUTION_LOCK_PASSWORD:etl_password}
+    acquire-timeout-seconds: ${EXECUTION_LOCK_ACQUIRE_TIMEOUT_SECONDS:900}
+    poll-interval-millis: ${EXECUTION_LOCK_POLL_INTERVAL_MILLIS:500}
+
+  hop:
+    # run.config.local / run.config.spark : noms des run configurations Hop
+    run:
+      config:
+        local:  ${HOP_RUN_CONFIG_LOCAL:local}
+        spark:  ${HOP_RUN_CONFIG_SPARK:spark}
+    local:
+      jvm:
+        memory: ${HOP_LOCAL_JVM_MEMORY:2g}
+    # Timeout max d'exécution Hop (0 ou négatif = pas de timeout). 600s = 10 min.
+    execution:
+      timeout:
+        seconds: ${HOP_EXECUTION_TIMEOUT_SECONDS:300}
+    engine:
+      path: ${HOP_ENGINE_PATH:}
+    python:
+      executable: ${HOP_PYTHON_EXECUTABLE:python}
+    config:
+      dir: ${HOP_CONFIG_FOLDER:}
+    project:
+      home: ${HOP_PROJECT_HOME:}
+    # home / run.script / workflow.file / pipelines.dir / temp.dir
+    # sont définis PAR PROFIL plus bas (valeurs différentes Linux vs Windows)
+
+  spark:
+    row:
+      threshold:    ${SPARK_ROW_THRESHOLD:10000000}
+    distributed:
+      ready: ${SPARK_DISTRIBUTED_READY:false}
+    submit:
+      path: ${SPARK_SUBMIT_PATH:/opt/spark/bin/spark-submit}
+    master-url: ${SPARK_MASTER_URL:spark://spark-master:7077}
+    job-file: ${SPARK_JOB_FILE:/opt/iol/engine/spark_etl.py}
+    jdbc-jars-dir: ${SPARK_JDBC_JARS_DIR:/opt/iol/jdbc}
+    driver-memory: ${SPARK_DRIVER_MEMORY:1g}
+    executor-memory: ${SPARK_EXECUTOR_MEMORY:2g}
+    executor-cores: ${SPARK_EXECUTOR_CORES:2}
+    cores-max: ${SPARK_CORES_MAX:4}
+    execution:
+      timeout:
+        seconds: ${SPARK_EXECUTION_TIMEOUT_SECONDS:3600}
+
+  workflow:
+    service:
+      url: ${WORKFLOW_SERVICE_URL:http://localhost:8084}
+
+  security:
+    internal-secret: ${APP_INTERNAL_SECRET:${INTEROP_INTERNAL_SECRET:}}
+    internal-secret-file: ${APP_INTERNAL_SECRET_FILE:}
+    oauth2:
+      token-uri: ${KEYCLOAK_TOKEN_URI:}
+      client-id: ${KEYCLOAK_CLIENT_ID:iol-pipeline-consumer}
+      client-secret: ${KEYCLOAK_CLIENT_SECRET:}
+      client-secret-file: ${KEYCLOAK_CLIENT_SECRET_FILE:}
+
+# clé attendue par le code : orchestrator.idempotence.ttl.seconds (SANS préfixe app)
+orchestrator:
+  idempotence:
+    ttl:
+      seconds: ${IDEMPOTENCE_TTL_SECONDS:3600}
+
+logging:
+  level:
+    root: INFO
+    com.iol.etlplatform: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+
+server:
+  port: ${SERVER_PORT:8085}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+        add-additional-paths: true
+      group:
+        readiness:
+          include: readinessState,pipelineReadiness
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  PROFIL LINUX (production / Docker)
+# ═══════════════════════════════════════════════════════════════════════════
+---
+spring:
+  config:
+    activate:
+      on-profile: linux
+app:
+  hop:
+    home:           ${HOP_HOME:/opt/hop}
+    project:
+      name:         ${HOP_PROJECT_NAME:default}
+      home:         ${HOP_PROJECT_HOME:/opt/iol/project}
+    environment:
+      name:         ${HOP_ENVIRONMENT_NAME:}
+    run:
+      script:       ${HOP_RUN_SCRIPT:hop-run.sh}
+    workflow:
+      file:         ${HOP_WORKFLOW_FILE:wf_main_ingestion.hwf}
+    pipelines:
+      dir:          ${HOP_PIPELINES_DIR:/opt/iol/project/Projet ETL/Global_Config}
+    temp:
+      dir:          ${HOP_TEMP_DIR:/tmp/iol}
+    engine:
+      path:         ${HOP_ENGINE_PATH:/opt/iol/engine/moteur_universel.py}
+    python:
+      executable:   ${HOP_PYTHON_EXECUTABLE:python3}
+    config:
+      dir:          ${HOP_CONFIG_FOLDER:/tmp/iol/hop-config}
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  PROFIL WINDOWS (développement local)
+# ═══════════════════════════════════════════════════════════════════════════
+---
+spring:
+  config:
+    activate:
+      on-profile: windows
+app:
+  hop:
+    home:           ${HOP_HOME:C:/Users/ANDY/Desktop/ING5/Stage/hop}
+    project:
+      name:         ${HOP_PROJECT_NAME:Test ETL}
+      home:         ${HOP_PROJECT_HOME:C:/Users/ANDY/Desktop/ING5/Stage}
+    environment:
+      name:         ${HOP_ENVIRONMENT_NAME:}
+    run:
+      script:       ${HOP_RUN_SCRIPT:hop-run.bat}
+    workflow:
+      file:         ${HOP_WORKFLOW_FILE:wf_main_ingestion.hwf}
+    pipelines:
+      dir:          ${HOP_PIPELINES_DIR:C:/Users/ANDY/Desktop/ING5/Stage/Projet ETL/Global_Config}
+    temp:
+      dir:          ${HOP_TEMP_DIR:C:/Users/ANDY/AppData/Local/Temp/iol}
+    engine:
+      path:         ${HOP_ENGINE_PATH:C:/Users/ANDY/Desktop/iol_plateform/moteur_universel.py}
+    python:
+      executable:   ${HOP_PYTHON_EXECUTABLE:python}
+    config:
+      dir:          ${HOP_CONFIG_FOLDER:}

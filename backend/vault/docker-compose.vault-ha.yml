@@ -1,0 +1,101 @@
+services:
+  vault-1:
+    image: hashicorp/vault:1.21.7
+    restart: unless-stopped
+    command: ["server", "-config=/vault/config/vault.hcl"]
+    volumes:
+      - vault_1_data:/vault/data
+      - ./generated/vault-1.hcl:/vault/config/vault.hcl:ro
+      - ../secrets/runtime-tls/vault:/vault/tls:ro
+      - vault_1_audit:/vault/audit
+    ports:
+      - "127.0.0.1:${VAULT_LOCAL_PORT:-8200}:8200"
+    networks:
+      vault-cluster:
+      vault-egress:
+      vault-client:
+        aliases: [vault]
+    healthcheck:
+      test: ["CMD-SHELL", "VAULT_ADDR=https://vault-1:8200 vault status -ca-cert=/vault/tls/ca.pem -client-cert=/vault/tls/vault.crt -client-key=/vault/tls/vault.key >/dev/null 2>&1; code=$$?; [ $$code -eq 0 ] || [ $$code -eq 2 ]"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    security_opt: ["no-new-privileges:true"]
+
+  vault-2:
+    image: hashicorp/vault:1.21.7
+    restart: unless-stopped
+    command: ["server", "-config=/vault/config/vault.hcl"]
+    volumes:
+      - vault_2_data:/vault/data
+      - ./generated/vault-2.hcl:/vault/config/vault.hcl:ro
+      - ../secrets/runtime-tls/vault:/vault/tls:ro
+      - vault_2_audit:/vault/audit
+    networks: [vault-cluster, vault-egress, vault-client]
+    healthcheck:
+      test: ["CMD-SHELL", "VAULT_ADDR=https://vault-2:8200 vault status -ca-cert=/vault/tls/ca.pem -client-cert=/vault/tls/vault.crt -client-key=/vault/tls/vault.key >/dev/null 2>&1; code=$$?; [ $$code -eq 0 ] || [ $$code -eq 2 ]"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    security_opt: ["no-new-privileges:true"]
+
+  vault-3:
+    image: hashicorp/vault:1.21.7
+    restart: unless-stopped
+    command: ["server", "-config=/vault/config/vault.hcl"]
+    volumes:
+      - vault_3_data:/vault/data
+      - ./generated/vault-3.hcl:/vault/config/vault.hcl:ro
+      - ../secrets/runtime-tls/vault:/vault/tls:ro
+      - vault_3_audit:/vault/audit
+    networks: [vault-cluster, vault-egress, vault-client]
+    healthcheck:
+      test: ["CMD-SHELL", "VAULT_ADDR=https://vault-3:8200 vault status -ca-cert=/vault/tls/ca.pem -client-cert=/vault/tls/vault.crt -client-key=/vault/tls/vault.key >/dev/null 2>&1; code=$$?; [ $$code -eq 0 ] || [ $$code -eq 2 ]"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    security_opt: ["no-new-privileges:true"]
+
+  vault-bootstrap:
+    image: hashicorp/vault:1.21.7
+    profiles: ["bootstrap"]
+    restart: "no"
+    entrypoint: ["/bin/sh", "/opt/iol/bootstrap-transit.sh"]
+    environment:
+      VAULT_ADDR: https://vault-1:8200
+      VAULT_CACERT: /vault/tls/ca.pem
+      VAULT_CLIENT_CERT: /vault/tls/vault.crt
+      VAULT_CLIENT_KEY: /vault/tls/vault.key
+      VAULT_TOKEN_FILE: /run/secrets/vault-bootstrap-root-token
+      VAULT_BOOTSTRAP_OUTPUT_DIR: /output
+    volumes:
+      - ./bootstrap-transit.sh:/opt/iol/bootstrap-transit.sh:ro
+      - ./policies:/vault/policies:ro
+      - ../secrets/runtime-tls/vault:/vault/tls:ro
+      - ../secrets/vault-generated:/output
+    secrets:
+      - vault-bootstrap-root-token
+    depends_on:
+      vault-1: {condition: service_healthy}
+    networks: [vault-cluster]
+    security_opt: ["no-new-privileges:true"]
+
+volumes:
+  vault_1_data:
+  vault_2_data:
+  vault_3_data:
+  vault_1_audit:
+  vault_2_audit:
+  vault_3_audit:
+
+networks:
+  vault-cluster:
+    internal: true
+  vault-egress:
+  vault-client:
+    external: true
+    name: "${IOL_VAULT_DOCKER_NETWORK:-iol-vault-client}"
+
+secrets:
+  vault-bootstrap-root-token:
+    file: ../secrets/vault-bootstrap-root-token

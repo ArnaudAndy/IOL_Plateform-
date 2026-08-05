@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": false,
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": false,
+    "noUncheckedSideEffectImports": false,
+    "outDir": ".tmp/mappers-test",
+    "rootDir": "src/lib/api",
+    "sourceMap": false
+  },
+  "include": [
+    "src/lib/api/mappers.ts",
+    "src/lib/api/mappers.test.ts",
+    "src/lib/api/types.ts"
+  ]
+}

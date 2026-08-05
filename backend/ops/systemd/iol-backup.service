@@ -1,0 +1,22 @@
+[Unit]
+Description=IOL backup, isolated restore test and encrypted off-site upload
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=iol
+Group=iol
+WorkingDirectory=/opt/iol/backend
+EnvironmentFile=/etc/iol/backup.env
+ExecStart=/usr/bin/bash /opt/iol/backend/ops/backup/backup-cycle.sh
+TimeoutStartSec=12h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

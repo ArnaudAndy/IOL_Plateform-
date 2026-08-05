@@ -1,0 +1,21 @@
+{
+  "virtualPath": "",
+  "rdbms": {
+    "MARIADB": {
+      "databaseName": "${TARGET_DATABASE}",
+      "pluginId": "MARIADB",
+      "accessType": 0,
+      "hostname": "${TARGET_HOST}",
+      "password": "${TARGET_PASSWORD}",
+      "pluginName": "MariaDB",
+      "port": "${TARGET_PORT}",
+      "attributes": {
+        "EXTRA_OPTION_MARIADB.useSsl": "false",
+        "EXTRA_OPTION_MARIADB.characterEncoding": "utf8"
+      },
+      "manualUrl": "",
+      "username": "${TARGET_USER}"
+    }
+  },
+  "name": "IOL_DESTINATION_MARIADB"
+}

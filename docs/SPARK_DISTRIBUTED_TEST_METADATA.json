@@ -1,0 +1,64 @@
+{
+  "workflowId": "spark-distributed-smoke-test",
+  "execLogId": "spark-test-001",
+  "workflowName": "Spark distributed transported JSON test",
+  "executionMode": "SPARK",
+  "sources": [
+    {
+      "source_name": "JSON",
+      "type": "JSON",
+      "original_source_name": "POSTGRES",
+      "transport_materialized": true,
+      "config": {
+        "file_path": "/tmp/iol/spark-distributed-source.jsonl",
+        "uri": "/tmp/iol/spark-distributed-source.jsonl",
+        "data_transport": "OBJECT_STORAGE",
+        "mapping_config": [
+          {
+            "mappingType": "DIRECT",
+            "sourceFields": ["patient_external_id"],
+            "iolTerm": "patient_id"
+          }
+        ],
+        "spark_write_partitions": 2,
+        "target_table": "bronze.spark_patients",
+        "write_mode": "replace",
+        "target_connection": {
+          "db_type": "POSTGRES",
+          "host": "postgres",
+          "port": 5432,
+          "database": "lakehouse",
+          "username": "etl_user",
+          "password": "etl_password"
+        },
+        "silver_config": {
+          "enabled": true,
+          "execution_engine": "SPARK",
+          "target_table_silver": "silver.spark_patients",
+          "spark_sql": "SELECT id, patient_id, upper(full_name) AS full_name FROM bronze_0",
+          "indexes": [
+            {
+              "name": "idx_spark_patients_patient_id",
+              "columns": ["patient_id"],
+              "unique": true
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "gold_config_global": {
+    "enabled": true,
+    "input_layer": "SILVER",
+    "execution_engine": "SPARK",
+    "target_table_gold": "gold.spark_patients",
+    "spark_sql": "SELECT patient_id, full_name, 'READY' AS status FROM silver_0",
+    "indexes": [
+      {
+        "name": "idx_gold_spark_patients_patient_id",
+        "columns": ["patient_id"],
+        "unique": true
+      }
+    ]
+  }
+}

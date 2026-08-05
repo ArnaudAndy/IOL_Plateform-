@@ -1,0 +1,20 @@
+{
+  "name": "@iol/interop-mediator",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Generic IOL OpenHIM mediator for inbound interoperability traffic.",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "kafkajs": "2.2.4",
+    "openhim-mediator-utils": "0.4.0",
+    "undici": "6.28.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

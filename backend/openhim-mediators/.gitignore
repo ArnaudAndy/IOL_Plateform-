@@ -1,0 +1,14 @@
+target/
+**/target/
+.env
+.env.*
+!.env.example
+*.log
+.idea/
+.vscode/
+*.iml
+*.p12
+*.pfx
+*.jks
+*.key
+*.pem

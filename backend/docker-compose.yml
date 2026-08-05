@@ -1,0 +1,474 @@
+# =============================================================================
+# IOL ETL Platform — Infrastructure complète
+# =============================================================================
+#
+# Services :
+#   nginx            Reverse proxy — point d'entrée unique (port 80/443)
+#   api-core         Backend Spring Boot                   (port interne 8084)
+#   pipeline-consumer Consumer Kafka + lanceur Hop          (port interne 8085)
+#   kafka            Bus événementiel                       (port interne 9092)
+#   mongodb          Métadonnées workflows                  (port interne 27017)
+#   postgres         Lakehouse Bronze/Silver/Gold           (port interne 5432)
+#
+# Accès depuis l'extérieur (via Nginx uniquement) :
+#   http://localhost/api/*      → api-core
+#   http://localhost/stream/*   → kafka (futur API gateway)
+#   http://localhost/           → frontend React (servi par Nginx)
+#
+# =============================================================================
+
+services:
+
+  # ── Reverse Proxy ──────────────────────────────────────────────────────────
+  nginx:
+    image: nginx:alpine
+    container_name: iol-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro          # certificats TLS (optionnel)
+      - ../frontend/dist:/usr/share/nginx/html:ro  # new frontend build
+    depends_on:
+      - api-core
+    networks:
+      - iol-internal
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── API Backend ────────────────────────────────────────────────────────────
+  api-core:
+    build:
+      context: ./api-core
+      dockerfile: Dockerfile
+    container_name: iol-api-core
+    restart: unless-stopped
+    expose:
+      - "8084"          # pas de port publié — Nginx achemine
+    volumes:
+      - iol-upload-data:/data/iol/uploads
+      - iol-quarantine-data:/data/iol/quarantine
+      - iol-api-transport:/var/lib/iol/transport
+    environment:
+      MONGODB_URI:               "mongodb://mongodb:27017/iol_metadata"
+      POSTGRES_URL:              "jdbc:postgresql://postgres:5432/lakehouse"
+      POSTGRES_USER:             ${POSTGRES_USER:-etl_user}
+      POSTGRES_PASSWORD:         ${POSTGRES_PASSWORD:-etl_password}
+      MAIL_HOST:                 "mailpit"
+      MAIL_PORT:                 "1025"
+      AUTH_MAIL_FROM:            ${AUTH_MAIL_FROM:-no-reply@iol.local}
+      AUTH_COOKIE_SECURE:        ${AUTH_COOKIE_SECURE:-false}
+      KAFKA_BOOTSTRAP_SERVERS:   "kafka:9092"
+      APP_KAFKA_ENABLED:         "true"
+      APP_KAFKA_COMMANDS_HIGH_TOPIC: "iol.pipeline.high"
+      APP_KAFKA_COMMANDS_TOPIC:     "iol.pipeline.commands"
+      APP_KAFKA_COMMANDS_LOW_TOPIC:  "iol.pipeline.low"
+      APP_KAFKA_STATUS_TOPIC:        "iol.pipeline.status"
+      APP_KAFKA_DLQ_TOPIC:           "iol.pipeline.commands.dlq"
+      APP_INTEROP_INTERNAL_SECRET:   ${INTEROP_INTERNAL_SECRET:-}
+      JWT_SECRET:                ${JWT_SECRET:-changeme_in_production}
+      GEMINI_API_KEY:            ${GEMINI_API_KEY:-}
+      GEMINI_MODEL:              ${GEMINI_MODEL:-gemini-3.6-flash}
+      GEMINI_ENDPOINT:           ${GEMINI_ENDPOINT:-https://generativelanguage.googleapis.com/v1beta/openai/chat/completions}
+      GROQ_API_KEY:              ${GROQ_API_KEY:-}
+      GROQ_MODEL:                ${GROQ_MODEL:-llama-3.3-70b-versatile}
+      GROQ_ENDPOINT:             ${GROQ_ENDPOINT:-https://api.groq.com/openai/v1/chat/completions}
+      AI_TIMEOUT_SECONDS:        ${AI_TIMEOUT_SECONDS:-30}
+      SERVER_PORT:               "8084"
+      APP_UPLOAD_ROOT:           "/data/iol/uploads"
+      APP_UPLOAD_QUARANTINE_ROOT: "/data/iol/quarantine"
+      APP_UPLOAD_MAX_FILE_SIZE:  "${APP_UPLOAD_MAX_FILE_SIZE:-5GB}"
+      APP_UPLOAD_MAX_REQUEST_SIZE: "${APP_UPLOAD_MAX_REQUEST_SIZE:-5GB}"
+      APP_UPLOAD_MAX_FILE_SIZE_BYTES: "${APP_UPLOAD_MAX_FILE_SIZE_BYTES:-5368709120}"
+      APP_MALWARE_SCAN_ENABLED:  "${MALWARE_SCAN_ENABLED:-true}"
+      APP_MALWARE_SCAN_FAIL_CLOSED: "${MALWARE_SCAN_FAIL_CLOSED:-true}"
+      APP_MALWARE_SCAN_MAX_FILE_SIZE_BYTES: "${MALWARE_SCAN_MAX_FILE_SIZE_BYTES:-2147483648}"
+      APP_MALWARE_QUARANTINE_RETENTION_DAYS: "${MALWARE_QUARANTINE_RETENTION_DAYS:-30}"
+      APP_MALWARE_QUARANTINE_CLEANUP_INTERVAL_MS: "${MALWARE_QUARANTINE_CLEANUP_INTERVAL_MS:-3600000}"
+      CLAMAV_HOST:               "clamav"
+      CLAMAV_PORT:               "3310"
+      CLAMAV_CONNECT_TIMEOUT_MS: "${CLAMAV_CONNECT_TIMEOUT_MS:-3000}"
+      CLAMAV_READ_TIMEOUT_MS:    "${CLAMAV_READ_TIMEOUT_MS:-300000}"
+      OBJECT_STORAGE_ENABLED:    "true"
+      OBJECT_STORAGE_ENDPOINT:   "http://rustfs:9000"
+      OBJECT_STORAGE_REGION:     "us-east-1"
+      OBJECT_STORAGE_BUCKET:     "${OBJECT_STORAGE_BUCKET:-iol-source-data}"
+      OBJECT_STORAGE_ACCESS_KEY: "${RUSTFS_ACCESS_KEY:-rustfsadmin}"
+      OBJECT_STORAGE_SECRET_KEY: "${RUSTFS_SECRET_KEY:-rustfsadmin}"
+      OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES: "${OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES:-67108864}"
+      APP_KAFKA_ROW_BATCH_ROWS:   "${KAFKA_ROW_BATCH_ROWS:-500}"
+      APP_KAFKA_ROW_BATCH_MAX_EVENT_BYTES: "${KAFKA_ROW_BATCH_MAX_EVENT_BYTES:-8388608}"
+      SPARK_ROW_THRESHOLD:       "${SPARK_ROW_THRESHOLD:-10000000}"
+      IOL_MAX_STREAM_BYTES:      "${IOL_MAX_STREAM_BYTES:-10737418240}"
+      IOL_MAX_NDJSON_LINE_BYTES: "${IOL_MAX_NDJSON_LINE_BYTES:-134217728}"
+      APP_INTEROP_IDEMPOTENCY_LEASE_SECONDS: "${INTEROP_IDEMPOTENCY_LEASE_SECONDS:-86400}"
+      APP_KAFKA_DATA_TEMP_DIR:   "/var/lib/iol/transport"
+      APP_TENANCY_MODE:          "${TENANCY_MODE:-SINGLE_ORGANIZATION}"
+      APP_TENANCY_DEFAULT_ORGANIZATION_ID: "${DEFAULT_ORGANIZATION_ID:-iol-default}"
+      APP_LOCAL_EXTRACTION_MAX_BYTES: "${LOCAL_EXTRACTION_MAX_BYTES:-1073741824}"
+      APP_LOCAL_EXTRACTION_MIN_FREE_BYTES: "${LOCAL_EXTRACTION_MIN_FREE_BYTES:-536870912}"
+      APP_LOCAL_TEMP_MAX_AGE_SECONDS: "${LOCAL_TEMP_MAX_AGE_SECONDS:-86400}"
+      SPARK_AUTO_SELECTION_ENABLED: "${SPARK_AUTO_SELECTION_ENABLED:-true}"
+      SPARK_ESTIMATION_TIMEOUT_SECONDS: "${SPARK_ESTIMATION_TIMEOUT_SECONDS:-15}"
+      SPARK_ESTIMATION_UNKNOWN_MODE: "${SPARK_ESTIMATION_UNKNOWN_MODE:-SPARK}"
+      SPARK_JDBC_ROWS_PER_PARTITION: "${SPARK_JDBC_ROWS_PER_PARTITION:-500000}"
+      SPARK_JDBC_MAX_PARTITIONS: "${SPARK_JDBC_MAX_PARTITIONS:-32}"
+      SPARK_FILE_SIZE_THRESHOLD_BYTES: "${SPARK_FILE_SIZE_THRESHOLD_BYTES:-2147483648}"
+      EXECUTION_WATCHDOG_ENABLED: "${EXECUTION_WATCHDOG_ENABLED:-true}"
+      EXECUTION_WATCHDOG_SCAN_INTERVAL_MS: "${EXECUTION_WATCHDOG_SCAN_INTERVAL_MS:-30000}"
+      EXECUTION_HEARTBEAT_TIMEOUT_SECONDS: "${EXECUTION_HEARTBEAT_TIMEOUT_SECONDS:-120}"
+      EXECUTION_QUEUE_TIMEOUT_SECONDS: "${EXECUTION_QUEUE_TIMEOUT_SECONDS:-900}"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      mailpit:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+      clamav:
+        condition: service_healthy
+    networks:
+      - iol-internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8084/actuator/health/readiness"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Files stay in this isolated volume until ClamAV explicitly approves them.
+  clamav:
+    image: clamav/clamav:${CLAMAV_VERSION:-1.4}
+    container_name: iol-clamav
+    restart: unless-stopped
+    expose:
+      - "3310"
+    environment:
+      CLAMD_CONF_MaxFileSize: "2G"
+      CLAMD_CONF_MaxScanSize: "4G"
+      CLAMD_CONF_MaxScanTime: "0"
+      CLAMD_CONF_AlertExceedsMax: "yes"
+      FRESHCLAM_CHECKS: "${CLAMAV_SIGNATURE_CHECKS_PER_DAY:-12}"
+    volumes:
+      - iol-quarantine-data:/data/iol/quarantine:ro
+      - clamav-signatures:/var/lib/clamav
+    networks:
+      - iol-internal
+    healthcheck:
+      # ClamAV 1.4.5 treats --ping combined with --wait as a scan without a
+      # target and exits with "Can't access file" even when clamd is healthy.
+      test: ["CMD", "clamdscan", "--ping=1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 360s
+
+  # ── Pipeline Consumer (Kafka → Hop) ────────────────────────────────────────
+  pipeline-consumer:
+    build:
+      context: ./pipeline-consumer
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "8085"
+    volumes:
+      - ${HOP_HOST_PROJECT_HOME:-../hop-project}:/opt/iol/project:ro
+      - ../moteur_universel.py:/opt/iol/engine/moteur_universel.py:ro
+      - ../mapping_engine.py:/opt/iol/engine/mapping_engine.py:ro
+      - ../spark_etl.py:/opt/iol/engine/spark_etl.py:ro
+      - iol-hop-temp:/tmp/iol                      # fichiers JSON temporaires
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS:   "kafka:9092"
+      APP_KAFKA_COMMANDS_HIGH_TOPIC: "iol.pipeline.high"
+      APP_KAFKA_COMMANDS_TOPIC:     "iol.pipeline.commands"
+      APP_KAFKA_COMMANDS_LOW_TOPIC:  "iol.pipeline.low"
+      APP_KAFKA_STATUS_TOPIC:        "iol.pipeline.status"
+      APP_KAFKA_DLQ_TOPIC:           "iol.pipeline.commands.dlq"
+      WORKFLOW_SERVICE_URL:      "http://api-core:8084"
+      HOP_HOME:                  "/opt/hop"
+      HOP_JAVA_HOME:             "/opt/iol/java21"
+      HOP_RUN_SCRIPT:            "hop-run.sh"
+      HOP_PROJECT_NAME:          "${HOP_PROJECT_NAME:-Test ETL}"
+      HOP_PROJECT_HOME:          "/opt/iol/project"
+      HOP_CONFIG_FOLDER:         "/tmp/iol/hop-config"
+      HOP_ENVIRONMENT_NAME:      "${HOP_ENVIRONMENT_NAME:-}"
+      HOP_WORKFLOW_FILE:         "${HOP_WORKFLOW_FILE:-wf_main_ingestion.hwf}"
+      HOP_RUN_CONFIG_LOCAL:      "${HOP_RUN_CONFIG_LOCAL:-local}"
+      HOP_RUN_CONFIG_SPARK:      "${HOP_RUN_CONFIG_SPARK:-spark}"
+      HOP_PIPELINES_DIR:         "/opt/iol/project/Projet ETL/Global_Config"
+      HOP_ENGINE_PATH:           "/opt/iol/engine/moteur_universel.py"
+      HOP_PYTHON_EXECUTABLE:     "python3"
+      PYTHONPATH:                "/opt/iol/engine"
+      HOP_TEMP_DIR:              "/tmp/iol"
+      HOP_EXECUTION_TIMEOUT_SECONDS: "${HOP_EXECUTION_TIMEOUT_SECONDS:-900}"
+      HOP_LOCAL_JVM_MEMORY:      "${HOP_LOCAL_JVM_MEMORY:-2g}"
+      SPARK_ROW_THRESHOLD:       "${SPARK_ROW_THRESHOLD:-10000000}"
+      SPARK_DISTRIBUTED_READY:   "true"
+      SPARK_SUBMIT_PATH:         "/opt/spark/bin/spark-submit"
+      SPARK_MASTER_URL:          "spark://spark-master:7077"
+      SPARK_JOB_FILE:            "/opt/iol/engine/spark_etl.py"
+      SPARK_JDBC_JARS_DIR:       "/opt/iol/jdbc"
+      SPARK_DRIVER_MEMORY:       "${SPARK_DRIVER_MEMORY:-1g}"
+      SPARK_EXECUTOR_MEMORY:     "${SPARK_EXECUTOR_MEMORY:-2g}"
+      SPARK_EXECUTOR_CORES:      "${SPARK_EXECUTOR_CORES:-2}"
+      SPARK_CORES_MAX:           "${SPARK_CORES_MAX:-4}"
+      SPARK_EXECUTION_TIMEOUT_SECONDS: "${SPARK_EXECUTION_TIMEOUT_SECONDS:-3600}"
+      APP_KAFKA_CONSUMER_CONCURRENCY: "${PIPELINE_CONSUMER_CONCURRENCY:-3}"
+      APP_KAFKA_STATUS_HEARTBEAT_SECONDS: "${PIPELINE_STATUS_HEARTBEAT_SECONDS:-5}"
+      APP_TENANCY_MODE:            "${TENANCY_MODE:-SINGLE_ORGANIZATION}"
+      APP_TENANCY_DEFAULT_ORGANIZATION_ID: "${DEFAULT_ORGANIZATION_ID:-iol-default}"
+      APP_TENANCY_ENFORCE_INTEROP_ORGANIZATION: "${ENFORCE_INTEROP_ORGANIZATION:-true}"
+      EXECUTION_LOCK_MODE:         "POSTGRES"
+      EXECUTION_LOCK_JDBC_URL:     "jdbc:postgresql://postgres:5432/lakehouse"
+      EXECUTION_LOCK_USERNAME:     ${POSTGRES_USER:-etl_user}
+      EXECUTION_LOCK_PASSWORD:     ${POSTGRES_PASSWORD:-etl_password}
+      EXECUTION_LOCK_ACQUIRE_TIMEOUT_SECONDS: "${EXECUTION_LOCK_ACQUIRE_TIMEOUT_SECONDS:-900}"
+      OBJECT_STORAGE_ENABLED:    "true"
+      OBJECT_STORAGE_ENDPOINT:   "http://rustfs:9000"
+      OBJECT_STORAGE_REGION:     "us-east-1"
+      OBJECT_STORAGE_BUCKET:     "${OBJECT_STORAGE_BUCKET:-iol-source-data}"
+      OBJECT_STORAGE_ACCESS_KEY: "${RUSTFS_ACCESS_KEY:-rustfsadmin}"
+      OBJECT_STORAGE_SECRET_KEY: "${RUSTFS_SECRET_KEY:-rustfsadmin}"
+      OBJECT_STORAGE_CLEANUP_ENABLED: "${OBJECT_STORAGE_CLEANUP_ENABLED:-true}"
+      OBJECT_STORAGE_FAILED_RETENTION_HOURS: "${OBJECT_STORAGE_FAILED_RETENTION_HOURS:-72}"
+      OBJECT_STORAGE_CLEANUP_SCAN_INTERVAL_MS: "${OBJECT_STORAGE_CLEANUP_SCAN_INTERVAL_MS:-3600000}"
+      SERVER_PORT:               "8085"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      spark-master:
+        condition: service_healthy
+      spark-worker:
+        condition: service_healthy
+    networks:
+      - iol-internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8085/actuator/health/readiness"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      replicas: ${PIPELINE_CONSUMER_REPLICAS:-2}
+
+  # ── Apache Spark standalone (calcul distribué) ─────────────────────────────
+  spark-master:
+    image: apache/spark:3.5.7-java17-python3
+    restart: unless-stopped
+    user: "0:0"
+    entrypoint: ["/opt/spark/bin/spark-class"]
+    command: ["org.apache.spark.deploy.master.Master"]
+    environment:
+      SPARK_MASTER_HOST: "spark-master"
+      SPARK_MASTER_PORT: "7077"
+      SPARK_MASTER_WEBUI_PORT: "8080"
+    expose:
+      - "7077"
+      - "8080"
+    ports:
+      - "127.0.0.1:${SPARK_MASTER_UI_PORT:-8088}:8080"
+    volumes:
+      - iol-hop-temp:/tmp/iol
+    networks:
+      - iol-internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/spark-master/7077'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  spark-worker:
+    image: apache/spark:3.5.7-java17-python3
+    restart: unless-stopped
+    user: "0:0"
+    entrypoint: ["/opt/spark/bin/spark-class"]
+    command: ["org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
+    environment:
+      SPARK_WORKER_CORES: "${SPARK_WORKER_CORES:-4}"
+      SPARK_WORKER_MEMORY: "${SPARK_WORKER_MEMORY:-4g}"
+      SPARK_WORKER_WEBUI_PORT: "8081"
+    expose:
+      - "8081"
+    ports:
+      - "127.0.0.1:${SPARK_WORKER_UI_PORT:-8089}:8081"
+    volumes:
+      - iol-hop-temp:/tmp/iol
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    networks:
+      - iol-internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/8081'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # ── Apache Kafka (KRaft, sans Zookeeper) ───────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: iol-kafka
+    restart: unless-stopped
+    expose:
+      - "9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      # RF=1 obligatoire pour les topics internes en mono-nœud (sinon échec au démarrage)
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # Gros messages JSON (config complète) — 10 Mo
+      KAFKA_MESSAGE_MAX_BYTES: 10485760
+      KAFKA_REPLICA_FETCH_MAX_BYTES: 10485760
+      KAFKA_SOCKET_REQUEST_MAX_BYTES: 104857600
+      # Rétention 7 jours
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_RETENTION_BYTES: -1
+      # ID de cluster KRaft (l'image formate le stockage automatiquement)
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      - iol-internal
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ── RustFS (stockage objet S3-compatible, auto-hébergé) ───────────────────
+  rustfs:
+    image: rustfs/rustfs:${RUSTFS_VERSION:-1.0.0-beta.9}
+    container_name: iol-rustfs
+    restart: unless-stopped
+    command: ["--console-enable", "/data"]
+    environment:
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ADDRESS: ":9001"
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_ACCESS_KEY: "${RUSTFS_ACCESS_KEY:-rustfsadmin}"
+      RUSTFS_SECRET_KEY: "${RUSTFS_SECRET_KEY:-rustfsadmin}"
+    ports:
+      - "127.0.0.1:${RUSTFS_API_PORT:-9000}:9000"
+      - "127.0.0.1:${RUSTFS_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - rustfs_data:/data
+    networks:
+      - iol-internal
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/minio/health/ready >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+  # ── MongoDB (Métadonnées) ──────────────────────────────────────────────────
+  mongodb:
+    image: mongo:7
+    container_name: iol-mongodb
+    restart: unless-stopped
+    expose:
+      - "27017"
+    environment:
+      MONGO_INITDB_DATABASE: iol_metadata
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - iol-internal
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ── PostgreSQL (Lakehouse Bronze/Silver/Gold) ──────────────────────────────
+  postgres:
+    image: postgres:16
+    container_name: iol-postgres
+    restart: unless-stopped
+    expose:
+      - "5432"
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER:-etl_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-etl_password}
+      POSTGRES_DB:       lakehouse
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - iol-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-etl_user} -d lakehouse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # Local SMTP inbox for password recovery. Web UI is proxied at /mail/.
+  mailpit:
+    image: axllent/mailpit:v1.20
+    container_name: iol-mailpit
+    restart: unless-stopped
+    expose:
+      - "1025"
+      - "8025"
+    environment:
+      MP_WEBROOT: "/mail/"
+    networks:
+      - iol-internal
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+# =============================================================================
+volumes:
+  kafka_data:
+  mongo_data:
+  pg_data:
+  iol-hop-temp:
+  iol-api-transport:
+  iol-upload-data:
+  iol-quarantine-data:
+  clamav-signatures:
+  rustfs_data:
+
+networks:
+  iol-internal:
+    driver: bridge

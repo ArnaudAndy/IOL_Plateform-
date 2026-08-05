@@ -1,0 +1,18 @@
+{
+  "virtualPath": "",
+  "rdbms": {
+    "SQLITE": {
+      "databaseName": "${TARGET_DATABASE}",
+      "pluginId": "SQLITE",
+      "accessType": 0,
+      "hostname": "",
+      "password": "",
+      "pluginName": "SQLite",
+      "port": "",
+      "attributes": {},
+      "manualUrl": "",
+      "username": ""
+    }
+  },
+  "name": "IOL_DESTINATION_SQLITE"
+}

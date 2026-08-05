@@ -1,0 +1,54 @@
+ui = false
+disable_mlock = false
+cluster_name = "iol-vault-production"
+api_addr = "https://vault-1.internal.example:8200"
+cluster_addr = "https://vault-1.internal.example:8201"
+
+storage "raft" {
+  path = "/vault/data"
+  node_id = "vault-1"
+
+  retry_join {
+    leader_api_addr = "https://vault-2.internal.example:8200"
+    leader_ca_cert_file = "/vault/tls/ca.pem"
+    leader_client_cert_file = "/vault/tls/vault-1.pem"
+    leader_client_key_file = "/vault/tls/vault-1-key.pem"
+  }
+
+  retry_join {
+    leader_api_addr = "https://vault-3.internal.example:8200"
+    leader_ca_cert_file = "/vault/tls/ca.pem"
+    leader_client_cert_file = "/vault/tls/vault-1.pem"
+    leader_client_key_file = "/vault/tls/vault-1-key.pem"
+  }
+}
+
+listener "tcp" {
+  address = "0.0.0.0:8200"
+  cluster_address = "0.0.0.0:8201"
+  tls_cert_file = "/vault/tls/vault-1.pem"
+  tls_key_file = "/vault/tls/vault-1-key.pem"
+  tls_client_ca_file = "/vault/tls/ca.pem"
+  tls_require_and_verify_client_cert = true
+  tls_min_version = "tls13"
+}
+
+# Listener TLS + ACL token reserve au client KMS RustFS, sur un reseau interne.
+listener "tcp" {
+  address = "0.0.0.0:8202"
+  tls_cert_file = "/vault/tls/vault-1.pem"
+  tls_key_file = "/vault/tls/vault-1-key.pem"
+  tls_min_version = "tls13"
+}
+
+# Configure exactly one production auto-unseal stanza for your cloud KMS/HSM.
+# Never place cloud credentials or an HSM PIN in this file.
+# seal "awskms" {
+#   region = "eu-west-1"
+#   kms_key_id = "alias/iol-vault-unseal"
+# }
+
+telemetry {
+  disable_hostname = true
+  prometheus_retention_time = "30s"
+}

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.4.5</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.iol.openhim</groupId>
+    <artifactId>openhim-mediator-iol-standard-packs</artifactId>
+    <version>1.1.0</version>
+    <packaging>pom</packaging>
+    <name>IOL OpenHIM Java Mediators</name>
+    <description>FHIR R4, ISO 20022 and Ed-Fi mediator services for IOL.</description>
+
+    <modules>
+        <module>mediator-runtime</module>
+        <module>openhim-mediator-iol-fhir</module>
+        <module>openhim-mediator-iol-iso20022</module>
+        <module>openhim-mediator-iol-edfi</module>
+    </modules>
+
+    <properties>
+        <java.version>17</java.version>
+        <hapi-fhir.version>8.10.0</hapi-fhir.version>
+        <prowide-iso20022.version>SRU2025-10.3.10</prowide-iso20022.version>
+    </properties>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-maven-plugin</artifactId>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
+</project>

@@ -1,0 +1,23 @@
+{
+  "virtualPath": "",
+  "rdbms": {
+    "MYSQL": {
+      "databaseName": "${TARGET_DATABASE}",
+      "pluginId": "MYSQL",
+      "accessType": 0,
+      "hostname": "${TARGET_HOST}",
+      "password": "${TARGET_PASSWORD}",
+      "pluginName": "MySQL",
+      "port": "${TARGET_PORT}",
+      "attributes": {
+        "EXTRA_OPTION_MYSQL.useSSL": "false",
+        "EXTRA_OPTION_MYSQL.allowPublicKeyRetrieval": "true",
+        "EXTRA_OPTION_MYSQL.characterEncoding": "utf8",
+        "EXTRA_OPTION_MYSQL.useUnicode": "true"
+      },
+      "manualUrl": "",
+      "username": "${TARGET_USER}"
+    }
+  },
+  "name": "IOL_DESTINATION_MYSQL"
+}

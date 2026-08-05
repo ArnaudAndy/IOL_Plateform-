@@ -1,0 +1,894 @@
+# Production topology rehearsal. Always combine with docker-compose.yml.
+# Real HA requires placing replicas on distinct hosts / availability zones.
+
+x-kafka-environment: &kafka-environment
+  KAFKA_PROCESS_ROLES: "broker,controller"
+  KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093,2@kafka-2:9093,3@kafka-3:9093"
+  KAFKA_LISTENERS: "SSL://:9092,CONTROLLER://:9093"
+  KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:SSL,SSL:SSL"
+  KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+  KAFKA_INTER_BROKER_LISTENER_NAME: "SSL"
+  KAFKA_SSL_CLIENT_AUTH: "required"
+  KAFKA_LISTENER_NAME_CONTROLLER_SSL_CLIENT_AUTH: "required"
+  KAFKA_SSL_TRUSTSTORE_FILENAME: "truststore.p12"
+  KAFKA_SSL_TRUSTSTORE_CREDENTIALS: "kafka-truststore-password"
+  KAFKA_SSL_TRUSTSTORE_TYPE: "PKCS12"
+  KAFKA_SSL_KEYSTORE_CREDENTIALS: "kafka-keystore-password"
+  KAFKA_SSL_KEY_CREDENTIALS: "kafka-key-password"
+  KAFKA_SSL_KEYSTORE_TYPE: "PKCS12"
+  KAFKA_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM: "HTTPS"
+  KAFKA_SSL_PRINCIPAL_MAPPING_RULES: "RULE:^CN=([^,]+).*$$/$$1/,DEFAULT"
+  KAFKA_AUTHORIZER_CLASS_NAME: "org.apache.kafka.metadata.authorizer.StandardAuthorizer"
+  KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND: "false"
+  KAFKA_SUPER_USERS: "User:kafka;User:kafka-2;User:kafka-3;User:kafka-admin"
+  KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+  KAFKA_NUM_PARTITIONS: 12
+  KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+  KAFKA_MIN_INSYNC_REPLICAS: 2
+  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+  KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+  KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+  KAFKA_UNCLEAN_LEADER_ELECTION_ENABLE: "false"
+  KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 3000
+  KAFKA_MESSAGE_MAX_BYTES: 10485760
+  KAFKA_REPLICA_FETCH_MAX_BYTES: 10485760
+  KAFKA_SOCKET_REQUEST_MAX_BYTES: 104857600
+  KAFKA_LOG_RETENTION_HOURS: 168
+  CLUSTER_ID: "${KAFKA_CLUSTER_ID:?KAFKA_CLUSTER_ID is required}"
+
+x-mongodb-command: &mongodb-command
+  - mongod
+  - --replSet
+  - rs-iol
+  - --bind_ip_all
+  - --auth
+  - --keyFile
+  - /var/lib/mongodb/iol-tls/mongodb-keyfile
+  - --tlsMode
+  - requireTLS
+  - --tlsCertificateKeyFile
+  - /var/lib/mongodb/iol-tls/server.pem
+  - --tlsCAFile
+  - /var/lib/mongodb/iol-tls/ca.pem
+
+x-rustfs-environment: &rustfs-environment
+  RUSTFS_ADDRESS: ":9000"
+  RUSTFS_CONSOLE_ADDRESS: ":9001"
+  RUSTFS_CONSOLE_ENABLE: "true"
+  RUSTFS_TLS_PATH: "/run/rustfs-tls"
+  RUSTFS_ACCESS_KEY_FILE: "/run/secrets/rustfs-root-access-key"
+  RUSTFS_SECRET_KEY_FILE: "/run/secrets/rustfs-root-secret-key"
+  RUSTFS_KMS_ENABLE: "true"
+  RUSTFS_KMS_BACKEND: "vault-transit"
+  RUSTFS_KMS_VAULT_ADDRESS: "${RUSTFS_VAULT_ADDR:-https://vault:8202}"
+  RUSTFS_KMS_VAULT_TOKEN_FILE: "/run/secrets/rustfs-vault-token"
+  RUSTFS_KMS_VAULT_MOUNT_PATH: "${VAULT_TRANSIT_MOUNT:-transit}"
+  RUSTFS_KMS_DEFAULT_KEY_ID: "${RUSTFS_KMS_KEY_ID:-iol-rustfs}"
+  SSL_CERT_FILE: "/run/rustfs-tls/ca.pem"
+  RUSTFS_BUFFER_PROFILE: "DataAnalytics"
+
+x-keycloak-environment: &keycloak-environment
+  KC_DB: postgres
+  KC_DB_USERNAME: keycloak
+  KC_DB_URL: "jdbc:postgresql://postgres:5432/keycloak?sslmode=verify-full&sslrootcert=/run/tls/ca.pem&sslcert=/run/tls/keycloak.crt&sslkey=/run/tls/keycloak.pk8"
+  KC_DB_PASSWORD_FILE: "/run/secrets/keycloak-db-password"
+  KC_BOOTSTRAP_ADMIN_USERNAME: "${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME:-iol-bootstrap-admin}"
+  KC_BOOTSTRAP_ADMIN_PASSWORD_FILE: "/run/secrets/keycloak-bootstrap-admin-password"
+  KC_HOSTNAME: "${IOL_PUBLIC_URL:?IOL_PUBLIC_URL is required}/auth"
+  KC_HTTP_RELATIVE_PATH: "/auth"
+  KC_HTTP_ENABLED: "false"
+  KC_HTTPS_CERTIFICATE_FILE: "/run/tls/keycloak.crt"
+  KC_HTTPS_CERTIFICATE_KEY_FILE: "/run/tls/keycloak.key"
+  KC_HTTPS_CLIENT_AUTH: "required"
+  KC_TRUSTSTORE_PATHS: "/run/tls/ca.pem"
+  KC_PROXY_HEADERS: "xforwarded"
+  KC_PROXY_TRUSTED_ADDRESSES: "172.30.0.0/24"
+  KC_CACHE: "ispn"
+  KC_CACHE_STACK: "jdbc-ping"
+  KC_CACHE_EMBEDDED_MTLS_ENABLED: "true"
+  KC_HEALTH_ENABLED: "true"
+  KC_METRICS_ENABLED: "true"
+  KC_HTTP_MANAGEMENT_SCHEME: "http"
+  KC_HTTP_MANAGEMENT_HOST: "127.0.0.1"
+  KC_HTTP_MANAGEMENT_RELATIVE_PATH: "/"
+  KC_DB_POOL_INITIAL_SIZE: "5"
+  KC_DB_POOL_MIN_SIZE: "5"
+  KC_DB_POOL_MAX_SIZE: "30"
+  KC_DB_LOG_SLOW_QUERIES_THRESHOLD: "1000"
+  KC_HTTP_MAX_QUEUED_REQUESTS: "1000"
+  JAVA_OPTS_KC_HEAP: "-XX:InitialRAMPercentage=30 -XX:MaxRAMPercentage=65"
+  KC_LOG_LEVEL: "INFO"
+
+services:
+  nginx:
+    image: "${IOL_IMAGE_REGISTRY:-ghcr.io/speedykom}/iol-web:${IOL_RELEASE_TAG:-preproduction}"
+    build:
+      context: ../frontend
+      args:
+        VITE_AUTH_MODE: keycloak
+    volumes: !override
+      - ./nginx/nginx.production.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/proxy-iol-mtls.conf:/etc/nginx/proxy-iol-mtls.conf:ro
+      - ./secrets/runtime-tls/nginx:/run/tls:ro
+    depends_on: !override
+      api-core:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+    cap_drop: ["ALL"]
+    cap_add: ["NET_BIND_SERVICE"]
+    security_opt: ["no-new-privileges:true"]
+
+  api-core:
+    image: "${IOL_IMAGE_REGISTRY:-ghcr.io/speedykom}/iol-api-core:${IOL_RELEASE_TAG:-preproduction}"
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      AUTH_MODE: KEYCLOAK
+      JWT_SECRET: ""
+      POSTGRES_URL: "jdbc:postgresql://postgres:5432/lakehouse?sslmode=verify-full&sslrootcert=/run/tls/ca.pem&sslcert=/run/tls/api-core.crt&sslkey=/run/tls/api-core.pk8"
+      POSTGRES_USER: "${POSTGRES_USER:-etl_user}"
+      POSTGRES_PASSWORD: ""
+      POSTGRES_PASSWORD_FILE: "/run/secrets/postgres-password"
+      MONGODB_PASSWORD_FILE: "/run/secrets/mongodb-app-password"
+      MONGODB_URI: "mongodb://iol_app:$${MONGODB_PASSWORD}@mongodb:27017,mongodb-2:27017,mongodb-3:27017/iol_metadata?replicaSet=rs-iol&authSource=iol_metadata&tls=true&tlsCAFile=/run/tls/ca.pem&tlsCertificateKeyFile=/run/tls/api-core.pem&serverSelectionTimeoutMS=5000"
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092,kafka-2:9092,kafka-3:9092"
+      SPRING_KAFKA_PROPERTIES_SECURITY_PROTOCOL: SSL
+      SPRING_KAFKA_PROPERTIES_SSL_TRUSTSTORE_LOCATION: "/run/tls/truststore.p12"
+      SPRING_KAFKA_PROPERTIES_SSL_TRUSTSTORE_TYPE: PKCS12
+      SPRING_KAFKA_PROPERTIES_SSL_TRUSTSTORE_PASSWORD: "$${KAFKA_SSL_TRUSTSTORE_PASSWORD}"
+      SPRING_KAFKA_PROPERTIES_SSL_KEYSTORE_LOCATION: "/run/tls/api-core.p12"
+      SPRING_KAFKA_PROPERTIES_SSL_KEYSTORE_TYPE: PKCS12
+      SPRING_KAFKA_PROPERTIES_SSL_KEYSTORE_PASSWORD: "$${KAFKA_SSL_KEYSTORE_PASSWORD}"
+      SPRING_KAFKA_PROPERTIES_SSL_KEY_PASSWORD: "$${KAFKA_SSL_KEY_PASSWORD}"
+      KAFKA_SSL_KEYSTORE_PASSWORD_FILE: "/run/secrets/tls-store-password"
+      KAFKA_SSL_KEY_PASSWORD_FILE: "/run/secrets/tls-store-password"
+      KAFKA_SSL_TRUSTSTORE_PASSWORD_FILE: "/run/secrets/tls-store-password"
+      API_TLS_KEYSTORE: "file:/run/tls/api-core.p12"
+      API_TLS_KEYSTORE_PASSWORD_FILE: "/run/secrets/tls-store-password"
+      IOL_TLS_KEYSTORE_PATH: "/run/tls/api-core.p12"
+      IOL_TLS_TRUSTSTORE: "file:/run/tls/truststore.p12"
+      IOL_TLS_TRUSTSTORE_PATH: "/run/tls/truststore.p12"
+      IOL_TLS_TRUSTSTORE_PASSWORD_FILE: "/run/secrets/tls-store-password"
+      KEYCLOAK_ISSUER_URI: "${IOL_PUBLIC_URL}/auth/realms/iol"
+      KEYCLOAK_JWK_SET_URI: "https://keycloak:8443/auth/realms/iol/protocol/openid-connect/certs"
+      KEYCLOAK_API_AUDIENCE: iol-api
+      KEYCLOAK_ADMIN_BASE_URL: "https://keycloak:8443/auth/admin/realms/iol"
+      KEYCLOAK_ADMIN_TOKEN_URI: "https://keycloak:8443/auth/realms/iol/protocol/openid-connect/token"
+      KEYCLOAK_ADMIN_CLIENT_ID: iol-api-admin
+      KEYCLOAK_ADMIN_CLIENT_SECRET_FILE: "/run/secrets/keycloak-api-admin-client-secret"
+      CREDENTIAL_PROVIDER: VAULT_TRANSIT
+      CREDENTIAL_ENVIRONMENT: production
+      CREDENTIAL_ALLOW_LEGACY_PLAINTEXT: "false"
+      CREDENTIAL_MIGRATE_LEGACY: "true"
+      VAULT_ADDR: "${VAULT_ADDR}"
+      VAULT_NAMESPACE: "${VAULT_NAMESPACE:-}"
+      VAULT_ROLE_ID_FILE: "/run/secrets/vault-api-role-id"
+      VAULT_SECRET_ID_FILE: "/run/secrets/vault-api-secret-id"
+      VAULT_TRANSIT_MOUNT: "${VAULT_TRANSIT_MOUNT:-transit}"
+      VAULT_TRANSIT_KEY: "${VAULT_TRANSIT_KEY:-iol-business-credentials}"
+      OBJECT_STORAGE_ENDPOINT: "https://rustfs-lb:9000"
+      OBJECT_STORAGE_ACCESS_KEY: ""
+      OBJECT_STORAGE_SECRET_KEY: ""
+      OBJECT_STORAGE_ACCESS_KEY_FILE: "/run/secrets/rustfs-app-access-key"
+      OBJECT_STORAGE_SECRET_KEY_FILE: "/run/secrets/rustfs-app-secret-key"
+      GEMINI_API_KEY: ""
+      GROQ_API_KEY: ""
+      GEMINI_API_KEY_FILE: "/run/secrets/gemini-api-key"
+      GROQ_API_KEY_FILE: "/run/secrets/groq-api-key"
+      APP_INTEROP_INTERNAL_SECRET: ""
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: 3311
+      CLAMAV_TLS_ENABLED: "true"
+      MAIL_HOST: "${SMTP_HOST:?SMTP_HOST is required}"
+      MAIL_PORT: "${SMTP_PORT:-587}"
+      MAIL_USERNAME: "${SMTP_USERNAME:-}"
+      MAIL_PASSWORD: ""
+      MAIL_PASSWORD_FILE: "/run/secrets/smtp-password"
+      MAIL_SMTP_AUTH: "true"
+      MAIL_SMTP_STARTTLS: "true"
+      APP_SECURITY_ALLOWED_ORIGINS: "${IOL_PUBLIC_URL}"
+      APP_MALWARE_SCAN_ENABLED: "true"
+      APP_MALWARE_SCAN_FAIL_CLOSED: "true"
+    volumes:
+      - iol-upload-data:/data/iol/uploads
+      - iol-quarantine-data:/data/iol/quarantine
+      - iol-api-transport:/var/lib/iol/transport
+      - ./secrets/runtime-tls/api-core:/run/tls:ro
+    secrets:
+      - postgres-password
+      - mongodb-app-password
+      - tls-store-password
+      - vault-api-role-id
+      - vault-api-secret-id
+      - keycloak-api-admin-client-secret
+      - rustfs-app-access-key
+      - rustfs-app-secret-key
+      - gemini-api-key
+      - groq-api-key
+      - smtp-password
+    depends_on: !override
+      kafka-init:
+        condition: service_completed_successfully
+      mongodb-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rustfs-lb:
+        condition: service_healthy
+      clamav-tls:
+        condition: service_started
+      keycloak-bootstrap:
+        condition: service_completed_successfully
+    networks: [iol-internal, iol-egress, iol-vault]
+    security_opt: ["no-new-privileges:true"]
+
+  pipeline-consumer:
+    image: "${IOL_IMAGE_REGISTRY:-ghcr.io/speedykom}/iol-pipeline-consumer:${IOL_RELEASE_TAG:-preproduction}"
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092,kafka-2:9092,kafka-3:9092"
+      KAFKA_CONSUMER_GROUP: iol-pipeline-consumer
+      SPRING_KAFKA_PROPERTIES_SECURITY_PROTOCOL: SSL
+      SPRING_KAFKA_PROPERTIES_SSL_TRUSTSTORE_LOCATION: "/run/tls/truststore.p12"
+      SPRING_KAFKA_PROPERTIES_SSL_TRUSTSTORE_TYPE: PKCS12
+      SPRING_KAFKA_PROPERTIES_SSL_TRUSTSTORE_PASSWORD: "$${KAFKA_SSL_TRUSTSTORE_PASSWORD}"
+      SPRING_KAFKA_PROPERTIES_SSL_KEYSTORE_LOCATION: "/run/tls/pipeline-consumer.p12"
+      SPRING_KAFKA_PROPERTIES_SSL_KEYSTORE_TYPE: PKCS12
+      SPRING_KAFKA_PROPERTIES_SSL_KEYSTORE_PASSWORD: "$${KAFKA_SSL_KEYSTORE_PASSWORD}"
+      SPRING_KAFKA_PROPERTIES_SSL_KEY_PASSWORD: "$${KAFKA_SSL_KEY_PASSWORD}"
+      KAFKA_SSL_KEYSTORE_PASSWORD_FILE: "/run/secrets/tls-store-password"
+      KAFKA_SSL_KEY_PASSWORD_FILE: "/run/secrets/tls-store-password"
+      KAFKA_SSL_TRUSTSTORE_PASSWORD_FILE: "/run/secrets/tls-store-password"
+      IOL_TLS_KEYSTORE_PATH: "/run/tls/pipeline-consumer.p12"
+      PIPELINE_TLS_KEYSTORE_PASSWORD_FILE: "/run/secrets/tls-store-password"
+      IOL_TLS_TRUSTSTORE_PATH: "/run/tls/truststore.p12"
+      IOL_TLS_TRUSTSTORE_PASSWORD_FILE: "/run/secrets/tls-store-password"
+      WORKFLOW_SERVICE_URL: "https://api-core:8084"
+      KEYCLOAK_TOKEN_URI: "https://keycloak:8443/auth/realms/iol/protocol/openid-connect/token"
+      KEYCLOAK_CLIENT_ID: iol-pipeline-consumer
+      KEYCLOAK_CLIENT_SECRET_FILE: "/run/secrets/keycloak-pipeline-client-secret"
+      APP_INTERNAL_SECRET: ""
+      EXECUTION_LOCK_JDBC_URL: "jdbc:postgresql://postgres:5432/lakehouse?sslmode=verify-full&sslrootcert=/run/tls/ca.pem&sslcert=/run/tls/pipeline-consumer.crt&sslkey=/run/tls/pipeline-consumer.pk8"
+      EXECUTION_LOCK_USERNAME: "${POSTGRES_USER:-etl_user}"
+      EXECUTION_LOCK_PASSWORD: ""
+      EXECUTION_LOCK_PASSWORD_FILE: "/run/secrets/postgres-password"
+      OBJECT_STORAGE_ENDPOINT: "https://rustfs-lb:9000"
+      OBJECT_STORAGE_ACCESS_KEY: ""
+      OBJECT_STORAGE_SECRET_KEY: ""
+      OBJECT_STORAGE_ACCESS_KEY_FILE: "/run/secrets/rustfs-app-access-key"
+      OBJECT_STORAGE_SECRET_KEY_FILE: "/run/secrets/rustfs-app-secret-key"
+      SPARK_MASTER_URL: "spark://spark-master:7077"
+      SPARK_AUTH_SECRET_FILE: "/run/secrets/spark-auth-secret"
+      SPARK_TLS_KEYSTORE_PATH: "/run/tls/pipeline-consumer.p12"
+      SPARK_CONF_DIR: "/tmp/iol/spark-conf"
+    volumes:
+      - ${HOP_HOST_PROJECT_HOME:-../hop-project}:/opt/iol/project:ro
+      - ../moteur_universel.py:/opt/iol/engine/moteur_universel.py:ro
+      - ../mapping_engine.py:/opt/iol/engine/mapping_engine.py:ro
+      - ../spark_etl.py:/opt/iol/engine/spark_etl.py:ro
+      - iol-hop-temp:/tmp/iol
+      - ./secrets/runtime-tls/pipeline-consumer:/run/tls:ro
+    secrets:
+      - postgres-password
+      - tls-store-password
+      - keycloak-pipeline-client-secret
+      - rustfs-app-access-key
+      - rustfs-app-secret-key
+      - spark-auth-secret
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rustfs-lb:
+        condition: service_healthy
+      spark-master:
+        condition: service_healthy
+      spark-worker:
+        condition: service_healthy
+      keycloak-bootstrap:
+        condition: service_completed_successfully
+    networks: [iol-internal, iol-egress]
+    deploy:
+      replicas: "${PIPELINE_CONSUMER_REPLICAS:-3}"
+      resources:
+        limits: {cpus: "4", memory: 8G}
+        reservations: {cpus: "1", memory: 2G}
+    security_opt: ["no-new-privileges:true"]
+
+  clamav-tls:
+    image: "${IOL_IMAGE_REGISTRY:-ghcr.io/speedykom}/iol-clamav-tls:${IOL_RELEASE_TAG:-preproduction}"
+    build:
+      context: ./stunnel
+    restart: unless-stopped
+    network_mode: "service:clamav"
+    volumes:
+      - ./stunnel/clamav-server.conf:/etc/stunnel/stunnel.conf:ro
+      - ./secrets/runtime-tls/clamav:/run/tls:ro
+    depends_on:
+      clamav:
+        condition: service_healthy
+    security_opt: ["no-new-privileges:true"]
+
+  spark-master:
+    ports: !reset []
+    entrypoint: ["/opt/iol/start-secure-spark.sh"]
+    environment:
+      SPARK_NODE_ROLE: master
+      SPARK_AUTH_SECRET_FILE: "/run/secrets/spark-auth-secret"
+      SPARK_MASTER_HOST: spark-master
+      SPARK_MASTER_PORT: 7077
+      SPARK_MASTER_WEBUI_PORT: 8080
+    volumes:
+      - iol-hop-temp:/tmp/iol
+      - ./spark/start-secure-spark.sh:/opt/iol/start-secure-spark.sh:ro
+      - ./secrets/runtime-tls/spark-master:/run/tls:ro
+    secrets:
+      - tls-store-password
+      - spark-auth-secret
+    networks: [iol-internal]
+    security_opt: ["no-new-privileges:true"]
+
+  spark-worker:
+    ports: !reset []
+    entrypoint: ["/opt/iol/start-secure-spark.sh"]
+    environment:
+      SPARK_NODE_ROLE: worker
+      SPARK_AUTH_SECRET_FILE: "/run/secrets/spark-auth-secret"
+      SPARK_MASTER_URL: "spark://spark-master:7077"
+      SPARK_WORKER_CORES: "${SPARK_WORKER_CORES:-4}"
+      SPARK_WORKER_MEMORY: "${SPARK_WORKER_MEMORY:-4g}"
+      SPARK_WORKER_WEBUI_PORT: 8081
+    volumes:
+      - iol-hop-temp:/tmp/iol
+      - ./spark/start-secure-spark.sh:/opt/iol/start-secure-spark.sh:ro
+      - ./secrets/runtime-tls/spark-worker:/run/tls:ro
+    secrets:
+      - tls-store-password
+      - spark-auth-secret
+    networks: [iol-internal, iol-egress]
+    deploy:
+      replicas: "${SPARK_WORKER_REPLICAS:-3}"
+      resources:
+        limits: {cpus: "8", memory: 16G}
+        reservations: {cpus: "2", memory: 4G}
+    security_opt: ["no-new-privileges:true"]
+
+  kafka:
+    image: confluentinc/cp-kafka:8.2.2-1-ubi9
+    container_name: iol-kafka-1
+    environment:
+      <<: *kafka-environment
+      KAFKA_NODE_ID: 1
+      KAFKA_ADVERTISED_LISTENERS: "SSL://kafka:9092"
+      KAFKA_SSL_KEYSTORE_FILENAME: "kafka.p12"
+    volumes:
+      - kafka_1_data:/var/lib/kafka/data
+      - ./secrets/runtime-tls/kafka-1:/etc/kafka/secrets:ro
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/9092'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 40s
+    networks: [iol-internal]
+    security_opt: ["no-new-privileges:true"]
+
+  kafka-2:
+    image: confluentinc/cp-kafka:8.2.2-1-ubi9
+    restart: unless-stopped
+    environment:
+      <<: *kafka-environment
+      KAFKA_NODE_ID: 2
+      KAFKA_ADVERTISED_LISTENERS: "SSL://kafka-2:9092"
+      KAFKA_SSL_KEYSTORE_FILENAME: "kafka-2.p12"
+    volumes:
+      - kafka_2_data:/var/lib/kafka/data
+      - ./secrets/runtime-tls/kafka-2:/etc/kafka/secrets:ro
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/9092'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 40s
+    networks: [iol-internal]
+    security_opt: ["no-new-privileges:true"]
+
+  kafka-3:
+    image: confluentinc/cp-kafka:8.2.2-1-ubi9
+    restart: unless-stopped
+    environment:
+      <<: *kafka-environment
+      KAFKA_NODE_ID: 3
+      KAFKA_ADVERTISED_LISTENERS: "SSL://kafka-3:9092"
+      KAFKA_SSL_KEYSTORE_FILENAME: "kafka-3.p12"
+    volumes:
+      - kafka_3_data:/var/lib/kafka/data
+      - ./secrets/runtime-tls/kafka-3:/etc/kafka/secrets:ro
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/9092'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 40s
+    networks: [iol-internal]
+    security_opt: ["no-new-privileges:true"]
+
+  kafka-init:
+    image: confluentinc/cp-kafka:8.2.2-1-ubi9
+    restart: "no"
+    entrypoint: ["/bin/bash", "/opt/iol/provision-topics-acls.sh"]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092,kafka-2:9092,kafka-3:9092"
+    volumes:
+      - ./ops/kafka/provision-topics-acls.sh:/opt/iol/provision-topics-acls.sh:ro
+      - ./ops/kafka/export-metadata.sh:/opt/iol/export-metadata.sh:ro
+      - ./secrets/runtime-tls/kafka-admin:/run/tls:ro
+    secrets:
+      - kafka-keystore-password
+      - kafka-key-password
+      - kafka-truststore-password
+    depends_on:
+      kafka: {condition: service_healthy}
+      kafka-2: {condition: service_healthy}
+      kafka-3: {condition: service_healthy}
+    networks: [iol-internal]
+    security_opt: ["no-new-privileges:true"]
+
+  mongodb:
+    image: "${IOL_IMAGE_REGISTRY:-ghcr.io/speedykom}/iol-mongodb:${IOL_RELEASE_TAG:-preproduction}"
+    build:
+      context: ./mongodb
+    container_name: iol-mongodb-1
+    command: *mongodb-command
+    environment:
+      MONGO_TLS_NAME: mongodb
+      MONGO_INITDB_DATABASE: iol_metadata
+      MONGO_INITDB_ROOT_USERNAME: iol_root
+      MONGO_INITDB_ROOT_PASSWORD_FILE: /run/secrets/mongodb-root-password
+    volumes:
+      - mongo_1_data:/data/db
+      - ./secrets/runtime-tls/mongodb:/run/tls-source:ro
+    secrets:
+      - mongodb-root-password
+      - mongodb-keyfile
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --tls --tlsCAFile /var/lib/mongodb/iol-tls/ca.pem --tlsCertificateKeyFile /var/lib/mongodb/iol-tls/server.pem --host mongodb --quiet --eval 'db.adminCommand({ping:1}).ok' | grep -qx 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+    networks: [iol-internal]
+    security_opt: ["no-new-privileges:true"]
+
+  mongodb-2:
+    image: "${IOL_IMAGE_REGISTRY:-ghcr.io/speedykom}/iol-mongodb:${IOL_RELEASE_TAG:-preproduction}"
+    build:
+      context: ./mongodb
+    restart: unless-stopped
+    command: *mongodb-command
+    environment:
+      MONGO_TLS_NAME: mongodb-2
+    volumes:
+      - mongo_2_data:/data/db
+      - ./secrets/runtime-tls/mongodb-2:/run/tls-source:ro
+    secrets: [mongodb-keyfile]
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --tls --tlsCAFile /var/lib/mongodb/iol-tls/ca.pem --tlsCertificateKeyFile /var/lib/mongodb/iol-tls/server.pem --host mongodb-2 --quiet --eval 'db.adminCommand({ping:1}).ok' | grep -qx 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+    networks: [iol-internal]
+    security_opt: ["no-new-privileges:true"]
+
+  mongodb-3:
+    image: "${IOL_IMAGE_REGISTRY:-ghcr.io/speedykom}/iol-mongodb:${IOL_RELEASE_TAG:-preproduction}"
+    build:
+      context: ./mongodb
+    restart: unless-stopped
+    command: *mongodb-command
+    environment:
+      MONGO_TLS_NAME: mongodb-3
+    volumes:
+      - mongo_3_data:/data/db
+      - ./secrets/runtime-tls/mongodb-3:/run/tls-source:ro
+    secrets: [mongodb-keyfile]
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --tls --tlsCAFile /var/lib/mongodb/iol-tls/ca.pem --tlsCertificateKeyFile /var/lib/mongodb/iol-tls/server.pem --host mongodb-3 --quiet --eval 'db.adminCommand({ping:1}).ok' | grep -qx 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+    networks: [iol-internal]
+    security_opt: ["no-new-privileges:true"]
+
+  mongodb-init:
+    image: mongo:8.2
+    restart: "no"
+    entrypoint: ["/bin/sh", "/opt/iol/init-replica-set.sh"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: iol_root
+      MONGODB_APP_USERNAME: iol_app
+      OPENHIM_MONGODB_USERNAME: openhim_app
+    volumes:
+      - ./ops/mongodb/init-replica-set.sh:/opt/iol/init-replica-set.sh:ro
+      - ./secrets/runtime-tls/mongodb:/run/tls:ro
+    secrets:
+      - mongodb-root-password
+      - mongodb-app-password
+      - mongodb-openhim-password
+    depends_on:
+      mongodb: {condition: service_healthy}
+      mongodb-2: {condition: service_healthy}
+      mongodb-3: {condition: service_healthy}
+    networks: [iol-internal]
+    security_opt: ["no-new-privileges:true"]
+
+  postgres:
+    image: "${IOL_IMAGE_REGISTRY:-ghcr.io/speedykom}/iol-postgres:${IOL_RELEASE_TAG:-preproduction}"
+    build:
+      context: ./postgres
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-etl_user}"
+      POSTGRES_PASSWORD: ""
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres-password
+      POSTGRES_DB: lakehouse
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --data-checksums"
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/var/lib/postgresql/iol-tls/server.crt
+      - -c
+      - ssl_key_file=/var/lib/postgresql/iol-tls/server.key
+      - -c
+      - ssl_ca_file=/var/lib/postgresql/iol-tls/ca.pem
+      - -c
+      - password_encryption=scram-sha-256
+    volumes:
+      - pg_prod_data:/var/lib/postgresql/data
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/20-iol-schema.sql:ro
+      - ./ops/postgres/00-enforce-tls.sh:/docker-entrypoint-initdb.d/00-enforce-tls.sh:ro
+      - ./ops/postgres/10-create-keycloak-db.sh:/docker-entrypoint-initdb.d/10-create-keycloak-db.sh:ro
+      - ./secrets/runtime-tls/postgres:/run/tls-source:ro
+    secrets:
+      - postgres-password
+      - keycloak-db-password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-etl_user} -d lakehouse"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    networks: [iol-internal]
+    security_opt: ["no-new-privileges:true"]
+
+  vault-rustfs-token-renewer:
+    image: hashicorp/vault:1.21.7
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/opt/iol/renew-rustfs-token.sh"]
+    environment:
+      VAULT_ADDR: "${VAULT_ADDR:?VAULT_ADDR is required}"
+      VAULT_CACERT: /run/tls/ca.pem
+      VAULT_CLIENT_CERT: /run/tls/vault-renewer.crt
+      VAULT_CLIENT_KEY: /run/tls/vault-renewer.key
+      VAULT_TOKEN_FILE: /run/secrets/rustfs-vault-token
+      VAULT_RENEW_INTERVAL_SECONDS: "${VAULT_RENEW_INTERVAL_SECONDS:-28800}"
+    volumes:
+      - ./vault/renew-rustfs-token.sh:/opt/iol/renew-rustfs-token.sh:ro
+      - ./secrets/runtime-tls/vault-renewer:/run/tls:ro
+    secrets: [rustfs-vault-token]
+    healthcheck:
+      test: ["CMD-SHELL", "VAULT_TOKEN=$$(tr -d '\\r\\n' </run/secrets/rustfs-vault-token) vault token lookup -format=json >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    networks: [iol-vault]
+    security_opt: ["no-new-privileges:true"]
+
+  rustfs:
+    ports: !reset []
+    container_name: iol-rustfs-1
+    entrypoint: ["/bin/sh", "/opt/iol/secure-entrypoint.sh"]
+    command: ["https://rustfs:9000/data", "https://rustfs-2:9000/data", "https://rustfs-3:9000/data", "https://rustfs-4:9000/data"]
+    environment: *rustfs-environment
+    volumes:
+      - rustfs_1_data:/data
+      - ./rustfs/secure-entrypoint.sh:/opt/iol/secure-entrypoint.sh:ro
+      - ./secrets/runtime-tls/rustfs:/run/rustfs-tls:ro
+    secrets:
+      - rustfs-root-access-key
+      - rustfs-root-secret-key
+      - rustfs-vault-token
+    depends_on:
+      vault-rustfs-token-renewer: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "curl --cacert /run/rustfs-tls/ca.pem -fsS https://rustfs:9000/minio/health/ready >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    networks: [iol-internal, iol-egress, iol-vault]
+    security_opt: ["no-new-privileges:true"]
+
+  rustfs-2:
+    image: rustfs/rustfs:${RUSTFS_VERSION:-1.0.0-beta.9}
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/opt/iol/secure-entrypoint.sh"]
+    command: ["https://rustfs:9000/data", "https://rustfs-2:9000/data", "https://rustfs-3:9000/data", "https://rustfs-4:9000/data"]
+    environment: *rustfs-environment
+    volumes:
+      - rustfs_2_data:/data
+      - ./rustfs/secure-entrypoint.sh:/opt/iol/secure-entrypoint.sh:ro
+      - ./secrets/runtime-tls/rustfs-2:/run/rustfs-tls:ro
+    secrets: [rustfs-root-access-key, rustfs-root-secret-key, rustfs-vault-token]
+    depends_on:
+      vault-rustfs-token-renewer: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "curl --cacert /run/rustfs-tls/ca.pem -fsS https://rustfs-2:9000/minio/health/ready >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    networks: [iol-internal, iol-egress, iol-vault]
+    security_opt: ["no-new-privileges:true"]
+
+  rustfs-3:
+    image: rustfs/rustfs:${RUSTFS_VERSION:-1.0.0-beta.9}
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/opt/iol/secure-entrypoint.sh"]
+    command: ["https://rustfs:9000/data", "https://rustfs-2:9000/data", "https://rustfs-3:9000/data", "https://rustfs-4:9000/data"]
+    environment: *rustfs-environment
+    volumes:
+      - rustfs_3_data:/data
+      - ./rustfs/secure-entrypoint.sh:/opt/iol/secure-entrypoint.sh:ro
+      - ./secrets/runtime-tls/rustfs-3:/run/rustfs-tls:ro
+    secrets: [rustfs-root-access-key, rustfs-root-secret-key, rustfs-vault-token]
+    depends_on:
+      vault-rustfs-token-renewer: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "curl --cacert /run/rustfs-tls/ca.pem -fsS https://rustfs-3:9000/minio/health/ready >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    networks: [iol-internal, iol-egress, iol-vault]
+    security_opt: ["no-new-privileges:true"]
+
+  rustfs-4:
+    image: rustfs/rustfs:${RUSTFS_VERSION:-1.0.0-beta.9}
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/opt/iol/secure-entrypoint.sh"]
+    command: ["https://rustfs:9000/data", "https://rustfs-2:9000/data", "https://rustfs-3:9000/data", "https://rustfs-4:9000/data"]
+    environment: *rustfs-environment
+    volumes:
+      - rustfs_4_data:/data
+      - ./rustfs/secure-entrypoint.sh:/opt/iol/secure-entrypoint.sh:ro
+      - ./secrets/runtime-tls/rustfs-4:/run/rustfs-tls:ro
+    secrets: [rustfs-root-access-key, rustfs-root-secret-key, rustfs-vault-token]
+    depends_on:
+      vault-rustfs-token-renewer: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "curl --cacert /run/rustfs-tls/ca.pem -fsS https://rustfs-4:9000/minio/health/ready >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    networks: [iol-internal, iol-egress, iol-vault]
+    security_opt: ["no-new-privileges:true"]
+
+  rustfs-lb:
+    image: nginx:1.29-alpine
+    restart: unless-stopped
+    volumes:
+      - ./nginx/rustfs-lb.conf:/etc/nginx/nginx.conf:ro
+      - ./secrets/runtime-tls/rustfs-lb:/run/tls:ro
+    depends_on:
+      rustfs: {condition: service_healthy}
+      rustfs-2: {condition: service_healthy}
+      rustfs-3: {condition: service_healthy}
+      rustfs-4: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "wget --ca-certificate=/run/tls/ca.pem -qO- https://rustfs-lb:9000/rustfs-lb-health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [iol-internal]
+    read_only: true
+    tmpfs: [/var/cache/nginx, /var/run]
+    security_opt: ["no-new-privileges:true"]
+
+  keycloak-realm-render:
+    image: "${IOL_IMAGE_REGISTRY:-ghcr.io/speedykom}/iol-keycloak-realm-render:${IOL_RELEASE_TAG:-preproduction}"
+    build:
+      context: ./keycloak
+      dockerfile: realm-renderer.Dockerfile
+    restart: "no"
+    environment:
+      IOL_PUBLIC_URL: "${IOL_PUBLIC_URL}"
+    volumes:
+      - ./keycloak/realm/iol-realm.json:/config/iol-realm.json:ro
+      - keycloak_realm_data:/import
+    security_opt: ["no-new-privileges:true"]
+
+  keycloak-1:
+    image: "${IOL_IMAGE_REGISTRY:-ghcr.io/speedykom}/iol-keycloak:${IOL_RELEASE_TAG:-preproduction}"
+    build:
+      context: ./keycloak
+    restart: unless-stopped
+    mem_limit: "${KEYCLOAK_MEMORY_LIMIT:-2g}"
+    environment:
+      <<: *keycloak-environment
+      KC_CACHE_EMBEDDED_NETWORK_BIND_ADDRESS: keycloak-1
+    volumes:
+      - keycloak_realm_data:/opt/keycloak/data/import:ro
+      - ./secrets/runtime-tls/keycloak:/run/tls:ro
+    secrets:
+      - keycloak-db-password
+      - keycloak-bootstrap-admin-password
+    depends_on:
+      postgres: {condition: service_healthy}
+      keycloak-realm-render: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "bash", "-ec", "{ printf 'HEAD /health/ready HTTP/1.0\\r\\n\\r\\n' >&0; grep -q 'HTTP/1.0 200'; } 0<>/dev/tcp/127.0.0.1/9000"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 45s
+    networks: [iol-internal, iol-egress]
+    security_opt: ["no-new-privileges:true"]
+
+  keycloak-2:
+    image: "${IOL_IMAGE_REGISTRY:-ghcr.io/speedykom}/iol-keycloak:${IOL_RELEASE_TAG:-preproduction}"
+    build:
+      context: ./keycloak
+    restart: unless-stopped
+    mem_limit: "${KEYCLOAK_MEMORY_LIMIT:-2g}"
+    environment:
+      <<: *keycloak-environment
+      KC_CACHE_EMBEDDED_NETWORK_BIND_ADDRESS: keycloak-2
+    volumes:
+      - keycloak_realm_data:/opt/keycloak/data/import:ro
+      - ./secrets/runtime-tls/keycloak:/run/tls:ro
+    secrets:
+      - keycloak-db-password
+      - keycloak-bootstrap-admin-password
+    depends_on:
+      postgres: {condition: service_healthy}
+      keycloak-realm-render: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "bash", "-ec", "{ printf 'HEAD /health/ready HTTP/1.0\\r\\n\\r\\n' >&0; grep -q 'HTTP/1.0 200'; } 0<>/dev/tcp/127.0.0.1/9000"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 45s
+    networks: [iol-internal, iol-egress]
+    security_opt: ["no-new-privileges:true"]
+
+  keycloak:
+    image: nginx:1.29-alpine
+    restart: unless-stopped
+    volumes:
+      - ./nginx/keycloak-lb.conf:/etc/nginx/nginx.conf:ro
+      - ./secrets/runtime-tls/keycloak:/run/tls:ro
+    depends_on:
+      keycloak-1: {condition: service_healthy}
+      keycloak-2: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [iol-internal]
+    read_only: true
+    tmpfs: [/var/cache/nginx, /var/run]
+    security_opt: ["no-new-privileges:true"]
+
+  keycloak-bootstrap:
+    profiles: ["bootstrap"]
+    image: "${IOL_IMAGE_REGISTRY:-ghcr.io/speedykom}/iol-keycloak:${IOL_RELEASE_TAG:-preproduction}"
+    build:
+      context: ./keycloak
+    restart: "no"
+    entrypoint: ["/bin/bash", "/opt/keycloak/bin/bootstrap-iol-keycloak.sh"]
+    environment:
+      KEYCLOAK_ADMIN_BASE_URL: "https://keycloak:8443/auth"
+      KEYCLOAK_ADMIN_USERNAME: "${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME:-iol-bootstrap-admin}"
+      KEYCLOAK_ADMIN_PASSWORD_FILE: "/run/secrets/keycloak-bootstrap-admin-password"
+      PIPELINE_CLIENT_SECRET_FILE: "/run/secrets/keycloak-pipeline-client-secret"
+      MEDIATOR_CLIENT_SECRET_FILE: "/run/secrets/keycloak-mediator-client-secret"
+      API_ADMIN_CLIENT_SECRET_FILE: "/run/secrets/keycloak-api-admin-client-secret"
+      OPENHIM_CLIENT_SECRET_FILE: "/run/secrets/keycloak-openhim-client-secret"
+      IOL_INITIAL_ADMIN_USERNAME: "${IOL_INITIAL_ADMIN_USERNAME:-}"
+      IOL_INITIAL_ADMIN_EMAIL: "${IOL_INITIAL_ADMIN_EMAIL:-}"
+      IOL_INITIAL_ADMIN_PASSWORD_FILE: "/run/secrets/iol-initial-admin-password"
+      KEYCLOAK_SMTP_HOST: "${SMTP_HOST:?SMTP_HOST is required}"
+      KEYCLOAK_SMTP_PORT: "${SMTP_PORT:-587}"
+      KEYCLOAK_SMTP_USERNAME: "${SMTP_USERNAME:?SMTP_USERNAME is required}"
+      KEYCLOAK_SMTP_FROM: "${SMTP_FROM:-${SMTP_USERNAME}}"
+      KEYCLOAK_SMTP_PASSWORD_FILE: "/run/secrets/smtp-password"
+      KEYCLOAK_SMTP_STARTTLS: "${SMTP_STARTTLS:-true}"
+      KEYCLOAK_SMTP_SSL: "${SMTP_SSL:-false}"
+      KEYCLOAK_REMOVE_BOOTSTRAP_ADMIN: "true"
+      KC_TRUSTSTORE_PATHS: "/run/tls/ca.pem"
+      IOL_TLS_STORE_PASSWORD_FILE: "/run/secrets/tls-store-password"
+    volumes:
+      - ./secrets/runtime-tls/keycloak:/run/tls:ro
+    secrets:
+      - keycloak-bootstrap-admin-password
+      - keycloak-pipeline-client-secret
+      - keycloak-mediator-client-secret
+      - keycloak-api-admin-client-secret
+      - keycloak-openhim-client-secret
+      - iol-initial-admin-password
+      - smtp-password
+      - tls-store-password
+    depends_on:
+      keycloak: {condition: service_healthy}
+    networks: [iol-internal]
+    security_opt: ["no-new-privileges:true"]
+
+  mailpit:
+    profiles: ["development-only"]
+
+volumes:
+  kafka_1_data:
+  kafka_2_data:
+  kafka_3_data:
+  mongo_1_data:
+  mongo_2_data:
+  mongo_3_data:
+  pg_prod_data:
+  rustfs_1_data:
+  rustfs_2_data:
+  rustfs_3_data:
+  rustfs_4_data:
+  keycloak_realm_data:
+
+networks:
+  iol-internal:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+  iol-egress:
+    driver: bridge
+  iol-vault:
+    external: true
+    name: "${IOL_VAULT_DOCKER_NETWORK:-iol-vault-client}"
+
+secrets:
+  postgres-password: {file: ./secrets/postgres-password}
+  mongodb-root-password: {file: ./secrets/mongodb-root-password}
+  mongodb-app-password: {file: ./secrets/mongodb-app-password}
+  mongodb-openhim-password: {file: ./secrets/mongodb-openhim-password}
+  mongodb-keyfile: {file: ./secrets/mongodb-keyfile}
+  rustfs-root-access-key: {file: ./secrets/rustfs-root-access-key}
+  rustfs-root-secret-key: {file: ./secrets/rustfs-root-secret-key}
+  rustfs-app-access-key: {file: ./secrets/rustfs-app-access-key}
+  rustfs-app-secret-key: {file: ./secrets/rustfs-app-secret-key}
+  rustfs-vault-token: {file: ./secrets/vault-generated/rustfs-vault-token}
+  tls-store-password: {file: ./secrets/tls-store-password}
+  kafka-keystore-password: {file: ./secrets/kafka-keystore-password}
+  kafka-key-password: {file: ./secrets/kafka-key-password}
+  kafka-truststore-password: {file: ./secrets/kafka-truststore-password}
+  spark-auth-secret: {file: ./secrets/spark-auth-secret}
+  vault-api-role-id: {file: ./secrets/vault-generated/vault-api-role-id}
+  vault-api-secret-id: {file: ./secrets/vault-generated/vault-api-secret-id}
+  keycloak-db-password: {file: ./secrets/keycloak-db-password}
+  keycloak-bootstrap-admin-password: {file: ./secrets/keycloak-bootstrap-admin-password}
+  keycloak-api-admin-client-secret: {file: ./secrets/keycloak-api-admin-client-secret}
+  keycloak-pipeline-client-secret: {file: ./secrets/keycloak-pipeline-client-secret}
+  keycloak-mediator-client-secret: {file: ./secrets/keycloak-mediator-client-secret}
+  keycloak-openhim-client-secret: {file: ./secrets/keycloak-openhim-client-secret}
+  iol-initial-admin-password: {file: ./secrets/iol-initial-admin-password}
+  gemini-api-key: {file: ./secrets/gemini-api-key}
+  groq-api-key: {file: ./secrets/groq-api-key}
+  smtp-password: {file: ./secrets/smtp-password}

@@ -1,0 +1,261 @@
+# ============================================================================
+# CONFIGURATION - ETL Platform
+# ============================================================================
+
+spring:
+  servlet:
+    multipart:
+      max-file-size: ${APP_UPLOAD_MAX_FILE_SIZE:512MB}
+      max-request-size: ${APP_UPLOAD_MAX_REQUEST_SIZE:512MB}
+  application:
+    name: etlplatform
+
+  mail:
+    host: ${MAIL_HOST:localhost}
+    port: ${MAIL_PORT:1025}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: ${MAIL_SMTP_AUTH:false}
+          starttls:
+            enable: ${MAIL_SMTP_STARTTLS:false}
+
+  data:
+    mongodb:
+      # serverSelectionTimeoutMS keeps requests from hanging ~30s when MongoDB is
+      # down — they fail fast (3s) with a clear error instead of a slow 500.
+      uri: ${MONGODB_URI:mongodb://localhost:27017/iol_metadata?serverSelectionTimeoutMS=3000&connectTimeoutMS=3000}
+    jdbc:
+      repositories:
+        enabled: false
+
+  datasource:
+    url: ${POSTGRES_URL:jdbc:postgresql://localhost:5432/lakehouse}
+    username: ${POSTGRES_USER:postgres}
+    password: ${POSTGRES_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      initialization-fail-timeout: -1
+
+  # JPA manages only authentication tables. Existing ETL tables are not mapped
+  # and are therefore left untouched.
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: true
+    operations-sorter: method
+    tags-sorter: alpha
+    display-request-duration: true
+    try-it-out-enabled: true
+  use-fqn: true
+  cache:
+    disabled: true
+
+server:
+  port: ${SERVER_PORT:8082}
+  servlet:
+    context-path: /
+  error:
+    include-message: always
+    include-stacktrace: on_param
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+        add-additional-paths: true
+      group:
+        readiness:
+          include: readinessState,db,mongo,kafka,clamAv,objectStorage
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+
+logging:
+  level:
+    root: INFO
+    com.iol.etlplatform: DEBUG
+    org.springframework.web: INFO
+    org.springframework.security: WARN
+    org.springframework.security.config.annotation.authentication.configuration.InitializeUserDetailsBeanManagerConfigurer: ERROR
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+
+app:
+  credentials:
+    # LOCAL_AES_GCM facilite le développement hors ligne. Le profil prod refuse
+    # de démarrer tant que VAULT_TRANSIT n'est pas sélectionné.
+    provider: ${CREDENTIAL_PROVIDER:LOCAL_AES_GCM}
+    environment: ${CREDENTIAL_ENVIRONMENT:development}
+    aes-key: ${CREDENTIAL_AES_KEY:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}
+    allow-legacy-plaintext: ${CREDENTIAL_ALLOW_LEGACY_PLAINTEXT:true}
+    migrate-legacy-on-startup: ${CREDENTIAL_MIGRATE_LEGACY:true}
+    runtime-lease-seconds: ${CREDENTIAL_RUNTIME_LEASE_SECONDS:120}
+    vault:
+      address: ${VAULT_ADDR:}
+      namespace: ${VAULT_NAMESPACE:}
+      transit-mount: ${VAULT_TRANSIT_MOUNT:transit}
+      key-name: ${VAULT_TRANSIT_KEY:iol-business-credentials}
+      token-file: ${VAULT_TOKEN_FILE:}
+      role-id-file: ${VAULT_ROLE_ID_FILE:}
+      secret-id-file: ${VAULT_SECRET_ID_FILE:}
+
+  security:
+    allowed-origins: ${APP_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000,http://localhost,http://127.0.0.1:5173}
+
+  upload:
+    root: ${APP_UPLOAD_ROOT:/data/iol/uploads}
+    quarantine-root: ${APP_UPLOAD_QUARANTINE_ROOT:/data/iol/quarantine}
+    max-file-size-bytes: ${APP_UPLOAD_MAX_FILE_SIZE_BYTES:536870912}
+
+  malware-scan:
+    enabled: ${APP_MALWARE_SCAN_ENABLED:false}
+    fail-closed: ${APP_MALWARE_SCAN_FAIL_CLOSED:true}
+    max-file-size-bytes: ${APP_MALWARE_SCAN_MAX_FILE_SIZE_BYTES:2147483648}
+    quarantine-retention-days: ${APP_MALWARE_QUARANTINE_RETENTION_DAYS:30}
+    quarantine-cleanup-interval-ms: ${APP_MALWARE_QUARANTINE_CLEANUP_INTERVAL_MS:3600000}
+    clamav:
+      host: ${CLAMAV_HOST:localhost}
+      port: ${CLAMAV_PORT:3310}
+      tls-enabled: ${CLAMAV_TLS_ENABLED:false}
+      connect-timeout-ms: ${CLAMAV_CONNECT_TIMEOUT_MS:3000}
+      read-timeout-ms: ${CLAMAV_READ_TIMEOUT_MS:300000}
+
+  object-storage:
+    enabled: ${OBJECT_STORAGE_ENABLED:false}
+    endpoint: ${OBJECT_STORAGE_ENDPOINT:http://localhost:9000}
+    region: ${OBJECT_STORAGE_REGION:us-east-1}
+    bucket: ${OBJECT_STORAGE_BUCKET:iol-source-data}
+    access-key: ${OBJECT_STORAGE_ACCESS_KEY:}
+    secret-key: ${OBJECT_STORAGE_SECRET_KEY:}
+    multipart:
+      part-size-bytes: ${OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES:67108864}
+
+  interop:
+    internal-secret: ${APP_INTEROP_INTERNAL_SECRET:${INTEROP_INTERNAL_SECRET:}}
+    idempotency-lease-seconds: ${APP_INTEROP_IDEMPOTENCY_LEASE_SECONDS:86400}
+    standard-packs:
+      seed-enabled: ${INTEROP_STANDARD_PACKS_SEED_ENABLED:true}
+    big-data:
+      row-threshold: ${SPARK_ROW_THRESHOLD:10000000}
+      byte-threshold: ${SPARK_FILE_SIZE_THRESHOLD_BYTES:2147483648}
+    max-stream-bytes: ${IOL_MAX_STREAM_BYTES:10737418240}
+    max-ndjson-line-bytes: ${IOL_MAX_NDJSON_LINE_BYTES:134217728}
+
+  tenancy:
+    mode: ${APP_TENANCY_MODE:SINGLE_ORGANIZATION}
+    default-organization-id: ${APP_TENANCY_DEFAULT_ORGANIZATION_ID:iol-default}
+
+  jwt:
+    secret: ${JWT_SECRET:c3VwZXJfc2VjcmV0X2tleV9wb3VyX2V0bF9wbGF0Zm9ybV8yMDI2X3Rlc3Q=}
+    expiration-ms: ${JWT_EXPIRATION_MS:900000}
+
+  auth:
+    mode: ${AUTH_MODE:LOCAL}
+    refresh-token-days: ${AUTH_REFRESH_TOKEN_DAYS:7}
+    reset-code-minutes: ${AUTH_RESET_CODE_MINUTES:10}
+    cookie-secure: ${AUTH_COOKIE_SECURE:false}
+    mail-from: ${AUTH_MAIL_FROM:no-reply@iol.local}
+
+  keycloak:
+    realm: ${KEYCLOAK_REALM:iol}
+    admin:
+      base-url: ${KEYCLOAK_ADMIN_BASE_URL:}
+      token-uri: ${KEYCLOAK_ADMIN_TOKEN_URI:}
+      client-id: ${KEYCLOAK_ADMIN_CLIENT_ID:iol-api-admin}
+      client-secret: ${KEYCLOAK_ADMIN_CLIENT_SECRET:}
+      client-secret-file: ${KEYCLOAK_ADMIN_CLIENT_SECRET_FILE:}
+
+  hop:
+    command: ${HOP_COMMAND:sh hop-run.sh}
+
+  kafka:
+    enabled: ${APP_KAFKA_ENABLED:true}
+    topics:
+      commands:
+        high:     ${APP_KAFKA_COMMANDS_HIGH_TOPIC:iol.pipeline.high}
+        default:  ${APP_KAFKA_COMMANDS_TOPIC:iol.pipeline.commands}
+        low:      ${APP_KAFKA_COMMANDS_LOW_TOPIC:iol.pipeline.low}
+      status:     ${APP_KAFKA_STATUS_TOPIC:iol.pipeline.status}
+      outbound-status: ${APP_KAFKA_OUTBOUND_STATUS_TOPIC:iol.outbound.status}
+      dlq:        ${APP_KAFKA_DLQ_TOPIC:iol.pipeline.commands.dlq}
+      outbound:   ${APP_KAFKA_OUTBOUND_TOPIC:iol.outbound.delivery}
+    consumer:
+      group:
+        status: ${APP_KAFKA_STATUS_GROUP:iol-api-status}
+    data-transport:
+      enabled: ${APP_KAFKA_DATA_TRANSPORT_ENABLED:true}
+      chunk-bytes: ${APP_KAFKA_DATA_CHUNK_BYTES:524288}
+      temp-dir: ${APP_KAFKA_DATA_TEMP_DIR:${java.io.tmpdir}/iol-api-transport}
+      row-batch-rows: ${APP_KAFKA_ROW_BATCH_ROWS:500}
+      max-row-batch-event-bytes: ${APP_KAFKA_ROW_BATCH_MAX_EVENT_BYTES:8388608}
+      max-local-extraction-bytes: ${APP_LOCAL_EXTRACTION_MAX_BYTES:1073741824}
+      min-free-disk-bytes: ${APP_LOCAL_EXTRACTION_MIN_FREE_BYTES:536870912}
+      stale-temp-file-age-seconds: ${APP_LOCAL_TEMP_MAX_AGE_SECONDS:86400}
+
+  outbound:
+    max-rows: ${APP_OUTBOUND_MAX_ROWS:1000}
+
+  spark:
+    row:
+      threshold: ${SPARK_ROW_THRESHOLD:10000000}
+    auto-selection:
+      enabled: ${SPARK_AUTO_SELECTION_ENABLED:true}
+      jdbc-query-timeout-seconds: ${SPARK_ESTIMATION_TIMEOUT_SECONDS:15}
+      jdbc-unknown-mode: ${SPARK_ESTIMATION_UNKNOWN_MODE:SPARK}
+      jdbc-rows-per-partition: ${SPARK_JDBC_ROWS_PER_PARTITION:500000}
+      jdbc-max-partitions: ${SPARK_JDBC_MAX_PARTITIONS:32}
+      file-size-threshold-bytes: ${SPARK_FILE_SIZE_THRESHOLD_BYTES:2147483648}
+
+  scheduler:
+    enabled: ${SCHEDULER_ENABLED:true}
+    timezone: ${SCHEDULER_TIMEZONE:UTC}
+
+  execution-watchdog:
+    enabled: ${EXECUTION_WATCHDOG_ENABLED:true}
+    scan-interval-ms: ${EXECUTION_WATCHDOG_SCAN_INTERVAL_MS:30000}
+    heartbeat-timeout-seconds: ${EXECUTION_HEARTBEAT_TIMEOUT_SECONDS:120}
+    queue-timeout-seconds: ${EXECUTION_QUEUE_TIMEOUT_SECONDS:900}
+
+  ai:
+    timeout-seconds: ${AI_TIMEOUT_SECONDS:30}
+    providers:
+      gemini:
+        endpoint: ${GEMINI_ENDPOINT:https://generativelanguage.googleapis.com/v1beta/openai/chat/completions}
+        api-key: ${GEMINI_API_KEY:}
+        model: ${GEMINI_MODEL:gemini-3.6-flash}
+      groq:
+        endpoint: ${GROQ_ENDPOINT:https://api.groq.com/openai/v1/chat/completions}
+        api-key: ${GROQ_API_KEY:}
+        model: ${GROQ_MODEL:llama-3.3-70b-versatile}

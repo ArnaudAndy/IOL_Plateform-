@@ -1,0 +1,18 @@
+{
+  "virtualPath": "",
+  "rdbms": {
+    "ORACLE": {
+      "databaseName": "${TARGET_DATABASE}",
+      "pluginId": "ORACLE",
+      "accessType": 0,
+      "hostname": "${TARGET_HOST}",
+      "password": "${TARGET_PASSWORD}",
+      "pluginName": "Oracle",
+      "port": "${TARGET_PORT}",
+      "attributes": { "PREFERRED_SCHEMA_NAME": "${TARGET_SCHEMA}" },
+      "manualUrl": "",
+      "username": "${TARGET_USER}"
+    }
+  },
+  "name": "IOL_DESTINATION_ORACLE"
+}

@@ -1,0 +1,47 @@
+server:
+  port: ${SERVER_PORT:3103}
+  tomcat:
+    max-swallow-size: ${MEDIATOR_MAX_REQUEST_BYTES:268435456}
+spring:
+  application:
+    name: openhim-mediator-iol-edfi
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,openHimRegistration
+mediator:
+  urn: ${MEDIATOR_URN:urn:mediator:iol-edfi}
+  name: ${MEDIATOR_NAME:IOL Ed-Fi Mediator}
+  version: ${MEDIATOR_VERSION:1.1.0}
+  description: Ed-Fi REST JSON and NDJSON mediator for IOL.
+  host: ${MEDIATOR_HOST:iol-edfi-mediator}
+  port: ${SERVER_PORT:3103}
+  route-path: ${MEDIATOR_ROUTE_PATH:}
+  channel-pattern: ^/interop/edfi(/.*)?$
+  channel-priority: ${MEDIATOR_CHANNEL_PRIORITY:1}
+  inbound-auth-type: ${IOL_INBOUND_AUTH_TYPE:private}
+  inbound-allowed-roles: ${IOL_INBOUND_ALLOWED_ROLES:iol-inbound}
+  default-standard-id: ${IOL_EDFI_STANDARD_ID:}
+  default-workflow-id: ${IOL_EDFI_WORKFLOW_ID:}
+  source-system: edfi
+  iol-mediator-url: ${IOL_MEDIATOR_URL:http://iol-mediator:3000}
+  max-request-bytes: ${MEDIATOR_MAX_REQUEST_BYTES:268435456}
+  edfi:
+    data-standard-version: ${EDFI_DATA_STANDARD_VERSION:6.1.0}
+    api-version: ${EDFI_API_VERSION:8}
+    max-records-per-request: ${EDFI_MAX_RECORDS_PER_REQUEST:250000}
+  openhim:
+    registration-enabled: ${OPENHIM_REGISTRATION_ENABLED:true}
+    api-url: ${OPENHIM_API_URL:http://nginx/openhim-api}
+    username: ${OPENHIM_USERNAME:}
+    password: ${OPENHIM_PASSWORD:}
+    heartbeat-ms: ${MEDIATOR_HEARTBEAT_INTERVAL_MS:10000}
+    install-channels: ${OPENHIM_INSTALL_CHANNELS:true}

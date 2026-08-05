@@ -1,0 +1,22 @@
+{
+  "virtualPath": "",
+  "rdbms": {
+    "SNOWFLAKE": {
+      "databaseName": "${TARGET_DATABASE}",
+      "pluginId": "SNOWFLAKE",
+      "accessType": 0,
+      "hostname": "${TARGET_HOST}",
+      "password": "${TARGET_PASSWORD}",
+      "pluginName": "Snowflake",
+      "port": "${TARGET_PORT}",
+      "attributes": {
+        "PREFERRED_SCHEMA_NAME": "${TARGET_SCHEMA}",
+        "EXTRA_OPTION_SNOWFLAKE.warehouse": "${TARGET_WAREHOUSE}",
+        "EXTRA_OPTION_SNOWFLAKE.role": "${TARGET_ROLE}"
+      },
+      "manualUrl": "",
+      "username": "${TARGET_USER}"
+    }
+  },
+  "name": "IOL_DESTINATION_SNOWFLAKE"
+}

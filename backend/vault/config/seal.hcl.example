@@ -1,0 +1,6 @@
+# Example only. Copy outside Git, replace the values, and protect it as an
+# infrastructure secret. Choose exactly one seal supported by your KMS/HSM.
+seal "awskms" {
+  region     = "eu-west-1"
+  kms_key_id = "alias/iol-vault-unseal"
+}

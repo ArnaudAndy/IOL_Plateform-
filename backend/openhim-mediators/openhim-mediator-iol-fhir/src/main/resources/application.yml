@@ -1,0 +1,47 @@
+server:
+  port: ${SERVER_PORT:3101}
+  tomcat:
+    max-swallow-size: ${MEDIATOR_MAX_REQUEST_BYTES:268435456}
+spring:
+  application:
+    name: openhim-mediator-iol-fhir
+  servlet:
+    multipart:
+      max-file-size: ${MEDIATOR_MAX_REQUEST_SIZE:256MB}
+      max-request-size: ${MEDIATOR_MAX_REQUEST_SIZE:256MB}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,openHimRegistration
+mediator:
+  urn: ${MEDIATOR_URN:urn:mediator:iol-fhir-r4}
+  name: ${MEDIATOR_NAME:IOL FHIR R4 Mediator}
+  version: ${MEDIATOR_VERSION:1.1.0}
+  description: FHIR R4 structural and Bundle mediator for IOL.
+  host: ${MEDIATOR_HOST:iol-fhir-mediator}
+  port: ${SERVER_PORT:3101}
+  route-path: ${MEDIATOR_ROUTE_PATH:}
+  channel-pattern: ^/interop/fhir(/.*)?$
+  channel-priority: ${MEDIATOR_CHANNEL_PRIORITY:1}
+  inbound-auth-type: ${IOL_INBOUND_AUTH_TYPE:private}
+  inbound-allowed-roles: ${IOL_INBOUND_ALLOWED_ROLES:iol-inbound}
+  default-standard-id: ${IOL_FHIR_STANDARD_ID:}
+  default-workflow-id: ${IOL_FHIR_WORKFLOW_ID:}
+  source-system: fhir-r4
+  iol-mediator-url: ${IOL_MEDIATOR_URL:http://iol-mediator:3000}
+  max-request-bytes: ${MEDIATOR_MAX_REQUEST_BYTES:268435456}
+  openhim:
+    registration-enabled: ${OPENHIM_REGISTRATION_ENABLED:true}
+    api-url: ${OPENHIM_API_URL:http://nginx/openhim-api}
+    username: ${OPENHIM_USERNAME:}
+    password: ${OPENHIM_PASSWORD:}
+    heartbeat-ms: ${MEDIATOR_HEARTBEAT_INTERVAL_MS:10000}
+    install-channels: ${OPENHIM_INSTALL_CHANNELS:true}

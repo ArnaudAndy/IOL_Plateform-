@@ -1,0 +1,46 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+      - name: Test and package
+        run: mvn --batch-mode verify
+
+  images:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        module:
+          - openhim-mediator-iol-fhir
+          - openhim-mediator-iol-iso20022
+          - openhim-mediator-iol-edfi
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build ${{ matrix.module }}
+        run: docker build -f ${{ matrix.module }}/Dockerfile -t ${{ matrix.module }}:ci .
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high

@@ -1,0 +1,55 @@
+[
+  {
+    "id": "std_pack_fhir_r4",
+    "name": "HL7 FHIR R4 - IOL Envelope",
+    "description": "FHIR R4 resources validated by HAPI and preserved without lossy flattening.",
+    "domain": "HEALTH",
+    "version": "R4",
+    "referenceUrl": "https://hl7.org/fhir/R4/",
+    "sourceSystem": "fhir-r4",
+    "terms": [
+      {"name": "fhir_resource_type", "type": "STRING", "required": true},
+      {"name": "fhir_id", "type": "STRING", "required": false},
+      {"name": "fhir_profiles", "type": "JSON", "required": false},
+      {"name": "fhir_resource_json", "type": "STRING", "required": true},
+      {"name": "fhir_bundle_type", "type": "STRING", "required": false},
+      {"name": "fhir_entry_index", "type": "INTEGER", "required": true},
+      {"name": "fhir_full_url", "type": "STRING", "required": false},
+      {"name": "fhir_request_method", "type": "STRING", "required": false},
+      {"name": "fhir_request_url", "type": "STRING", "required": false}
+    ]
+  },
+  {
+    "id": "std_pack_iso20022_2025",
+    "name": "ISO 20022 SRU 2025 - IOL Envelope",
+    "description": "ISO 20022 MX messages parsed with the complete Prowide Java object model.",
+    "domain": "FINANCE",
+    "version": "SRU2025",
+    "referenceUrl": "https://www.iso20022.org/catalogue-messages",
+    "sourceSystem": "iso20022",
+    "terms": [
+      {"name": "iso20022_message_definition_id", "type": "STRING", "required": true},
+      {"name": "iso20022_business_domain", "type": "STRING", "required": true},
+      {"name": "iso20022_namespace", "type": "STRING", "required": true},
+      {"name": "iso20022_payload_xml", "type": "STRING", "required": true},
+      {"name": "iso20022_payload_json", "type": "STRING", "required": true}
+    ]
+  },
+  {
+    "id": "std_pack_edfi_6_1",
+    "name": "Ed-Fi Data Standard 6.1 - IOL Envelope",
+    "description": "Ed-Fi REST resources preserved as canonical JSON with protocol metadata.",
+    "domain": "EDUCATION",
+    "version": "6.1.0",
+    "referenceUrl": "https://docs.ed-fi.org/reference/data-exchange/data-standard/",
+    "sourceSystem": "edfi",
+    "terms": [
+      {"name": "edfi_resource", "type": "STRING", "required": true},
+      {"name": "edfi_id", "type": "STRING", "required": false},
+      {"name": "edfi_etag", "type": "STRING", "required": false},
+      {"name": "edfi_data_standard_version", "type": "STRING", "required": true},
+      {"name": "edfi_api_version", "type": "STRING", "required": true},
+      {"name": "edfi_payload_json", "type": "STRING", "required": true}
+    ]
+  }
+]

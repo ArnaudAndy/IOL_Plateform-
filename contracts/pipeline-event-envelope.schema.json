@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://iol.local/schemas/pipeline-event-envelope.schema.json",
+  "title": "IOL Tenant-Aware Pipeline Event Envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "eventId",
+    "eventType",
+    "correlationId",
+    "organizationId",
+    "workflowId",
+    "direction",
+    "createdAt"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "1.0.0"},
+    "eventId": {"type": "string", "format": "uuid"},
+    "eventType": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,127}$"},
+    "correlationId": {"type": "string", "minLength": 1, "maxLength": 128},
+    "organizationId": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{2,63}$"
+    },
+    "contractId": {"type": ["string", "null"], "maxLength": 128},
+    "workflowId": {"type": "string", "minLength": 1, "maxLength": 128},
+    "executionLogId": {"type": ["string", "null"], "maxLength": 128},
+    "direction": {"enum": ["INTERNAL", "INBOUND", "OUTBOUND"]},
+    "payload": {"type": ["object", "array", "null"]},
+    "dataReference": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["transport", "location", "sha256"],
+      "properties": {
+        "transport": {"enum": ["RUSTFS"]},
+        "location": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      }
+    },
+    "createdAt": {"type": "string", "format": "date-time"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "direction": {"enum": ["INBOUND", "OUTBOUND"]}
+        }
+      },
+      "then": {
+        "required": ["contractId"]
+      }
+    },
+    {
+      "oneOf": [
+        {
+          "required": ["payload"],
+          "properties": {"dataReference": {"type": "null"}}
+        },
+        {
+          "required": ["dataReference"],
+          "properties": {"payload": {"type": "null"}}
+        }
+      ]
+    }
+  ]
+}

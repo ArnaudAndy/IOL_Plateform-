@@ -1,0 +1,11 @@
+{
+  "resourceType": "Patient",
+  "id": "patient-1001",
+  "active": true,
+  "identifier": [
+    {
+      "system": "https://example.org/patients",
+      "value": "P-1001"
+    }
+  ]
+}

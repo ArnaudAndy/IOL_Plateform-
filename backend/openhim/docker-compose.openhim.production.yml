@@ -1,0 +1,161 @@
+services:
+  openhim-mongo:
+    profiles: ["development-only"]
+
+  openhim-mongo-init:
+    profiles: ["development-only"]
+
+  openhim-core:
+    image: "${IOL_IMAGE_REGISTRY:-ghcr.io/speedykom}/iol-openhim-core:${IOL_RELEASE_TAG:-preproduction}"
+    environment:
+      NODE_ENV: production
+      OPENHIM_MONGODB_USERNAME: openhim_app
+      OPENHIM_MONGODB_PASSWORD_FILE: /run/secrets/mongodb-openhim-password
+      NODE_EXTRA_CA_CERTS: /run/tls/ca.pem
+      api_secureCookie: "true"
+      api_authenticationTypes: '["token","basic","openid","local"]'
+      api_openid_url: "${IOL_PUBLIC_URL:?IOL_PUBLIC_URL is required}/auth/realms/iol"
+      api_openid_callbackUrl: "${IOL_PUBLIC_URL}/openhim-console/"
+      api_openid_clientId: openhim-console
+      OPENHIM_OPENID_CLIENT_SECRET_FILE: /run/secrets/keycloak-openhim-client-secret
+      router_httpPort: "0"
+      router_httpsPort: "5000"
+      router_externalHostname: "${IOL_PUBLIC_HOSTNAME:?IOL_PUBLIC_HOSTNAME is required}"
+      authentication_enableMutualTLSAuthentication: "true"
+      authentication_enableBasicAuthentication: "true"
+      certificateManagement_watchFSForCert: "true"
+      certificateManagement_certPath: /run/tls/openhim.crt
+      certificateManagement_keyPath: /run/tls/openhim.key
+      openhimConsoleBaseUrl: "${IOL_PUBLIC_URL}/openhim-console/"
+      alerts_consoleURL: "${IOL_PUBLIC_URL}/openhim-console"
+    volumes:
+      - ../secrets/runtime-tls/openhim:/run/tls:ro
+    secrets:
+      - mongodb-openhim-password
+      - keycloak-openhim-client-secret
+    depends_on: !override {}
+    networks:
+      iol-internal:
+        aliases: [openhim]
+    healthcheck:
+      test: ["CMD-SHELL", "wget --ca-certificate=/run/tls/ca.pem -qO- https://openhim-core:8080/heartbeat >/dev/null"]
+      interval: 20s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+    security_opt: ["no-new-privileges:true"]
+
+  openhim-console:
+    environment:
+      OPENHIM_CONSOLE_PROTOCOL: https
+      OPENHIM_CORE_MEDIATOR_HOSTNAME: "${IOL_PUBLIC_HOSTNAME}"
+      OPENHIM_MEDIATOR_API_PORT: "443"
+      OPENHIM_CONSOLE_HOSTPATH: openhim-api
+      KC_OPENHIM_SSO_ENABLED: "true"
+
+  iol-mediator:
+    image: "${IOL_IMAGE_REGISTRY:-ghcr.io/speedykom}/iol-mediator:${IOL_RELEASE_TAG:-preproduction}"
+    environment:
+      OPENHIM_API_URL: "https://openhim-core:8080"
+      OPENHIM_PASSWORD: ""
+      OPENHIM_PASSWORD_FILE: /run/secrets/openhim-mediator-password
+      OPENHIM_TRUST_SELF_SIGNED: "false"
+      NODE_EXTRA_CA_CERTS: /run/tls/ca.pem
+      IOL_API_BASE_URL: "https://api-core:8084"
+      IOL_INTERNAL_SECRET: ""
+      IOL_OAUTH_TOKEN_URL: "https://keycloak:8443/auth/realms/iol/protocol/openid-connect/token"
+      IOL_OAUTH_CLIENT_ID: iol-mediator
+      IOL_OAUTH_CLIENT_SECRET_FILE: /run/secrets/keycloak-mediator-client-secret
+      IOL_MTLS_ENABLED: "true"
+      IOL_TLS_CA_FILE: /run/tls/ca.pem
+      IOL_TLS_CERT_FILE: /run/tls/iol-mediator.crt
+      IOL_TLS_KEY_FILE: /run/tls/iol-mediator.key
+      IOL_SERVER_TLS_ENABLED: "true"
+      IOL_SERVER_TLS_CERT_FILE: /run/tls/iol-mediator.crt
+      IOL_SERVER_TLS_KEY_FILE: /run/tls/iol-mediator.key
+      IOL_SERVER_TLS_CA_FILE: /run/tls/ca.pem
+      IOL_SERVER_TLS_REQUIRE_CLIENT_CERT: "false"
+      IOL_REQUIRE_TLS: "true"
+      IOL_INBOUND_CLIENT_PASSWORD: ""
+      IOL_INBOUND_CLIENT_PASSWORD_FILE: /run/secrets/openhim-inbound-client-password
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092,kafka-2:9092,kafka-3:9092"
+      KAFKA_TLS_ENABLED: "true"
+      KAFKA_TLS_CA_FILE: /run/tls/ca.pem
+      KAFKA_TLS_CERT_FILE: /run/tls/iol-mediator.crt
+      KAFKA_TLS_KEY_FILE: /run/tls/iol-mediator.key
+      OPENHIM_EGRESS_BASE_URL: "https://openhim-core:5000"
+    volumes:
+      - ../secrets/runtime-tls/iol-mediator:/run/tls:ro
+    secrets:
+      - openhim-mediator-password
+      - openhim-inbound-client-password
+      - keycloak-mediator-client-secret
+    networks: [iol-internal, iol-egress]
+    healthcheck:
+      test: ["CMD", "node", "-e", "const https=require('https'),fs=require('fs');https.get({hostname:'127.0.0.1',port:3000,path:'/ready',ca:fs.readFileSync('/run/tls/ca.pem'),servername:'iol-mediator'},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    security_opt: ["no-new-privileges:true"]
+
+  iol-fhir-mediator:
+    image: "${IOL_IMAGE_REGISTRY:-ghcr.io/speedykom}/iol-mediator-fhir:${IOL_RELEASE_TAG:-preproduction}"
+    environment:
+      OPENHIM_API_URL: "https://openhim-core:8080"
+      OPENHIM_PASSWORD: ""
+      OPENHIM_PASSWORD_FILE: /run/secrets/openhim-mediator-password
+      IOL_MEDIATOR_URL: "https://iol-mediator:3000"
+      MEDIATOR_TLS_KEYSTORE_PATH: /run/tls/iol-fhir-mediator.p12
+      TLS_STORE_PASSWORD_FILE: /run/secrets/tls-store-password
+    volumes:
+      - ../secrets/runtime-tls/iol-fhir-mediator:/run/tls:ro
+    secrets: [openhim-mediator-password, tls-store-password]
+    networks: [iol-internal]
+    healthcheck:
+      test: ["CMD", "curl", "--cacert", "/run/tls/ca.pem", "-fsS", "https://iol-fhir-mediator:3101/actuator/health/readiness"]
+
+  iol-iso20022-mediator:
+    image: "${IOL_IMAGE_REGISTRY:-ghcr.io/speedykom}/iol-mediator-iso20022:${IOL_RELEASE_TAG:-preproduction}"
+    environment:
+      OPENHIM_API_URL: "https://openhim-core:8080"
+      OPENHIM_PASSWORD: ""
+      OPENHIM_PASSWORD_FILE: /run/secrets/openhim-mediator-password
+      IOL_MEDIATOR_URL: "https://iol-mediator:3000"
+      MEDIATOR_TLS_KEYSTORE_PATH: /run/tls/iol-iso20022-mediator.p12
+      TLS_STORE_PASSWORD_FILE: /run/secrets/tls-store-password
+    volumes:
+      - ../secrets/runtime-tls/iol-iso20022-mediator:/run/tls:ro
+    secrets: [openhim-mediator-password, tls-store-password]
+    networks: [iol-internal]
+    healthcheck:
+      test: ["CMD", "curl", "--cacert", "/run/tls/ca.pem", "-fsS", "https://iol-iso20022-mediator:3102/actuator/health/readiness"]
+
+  iol-edfi-mediator:
+    image: "${IOL_IMAGE_REGISTRY:-ghcr.io/speedykom}/iol-mediator-edfi:${IOL_RELEASE_TAG:-preproduction}"
+    environment:
+      OPENHIM_API_URL: "https://openhim-core:8080"
+      OPENHIM_PASSWORD: ""
+      OPENHIM_PASSWORD_FILE: /run/secrets/openhim-mediator-password
+      IOL_MEDIATOR_URL: "https://iol-mediator:3000"
+      MEDIATOR_TLS_KEYSTORE_PATH: /run/tls/iol-edfi-mediator.p12
+      TLS_STORE_PASSWORD_FILE: /run/secrets/tls-store-password
+    volumes:
+      - ../secrets/runtime-tls/iol-edfi-mediator:/run/tls:ro
+    secrets: [openhim-mediator-password, tls-store-password]
+    networks: [iol-internal]
+    healthcheck:
+      test: ["CMD", "curl", "--cacert", "/run/tls/ca.pem", "-fsS", "https://iol-edfi-mediator:3103/actuator/health/readiness"]
+
+networks:
+  iol-egress:
+    external: true
+    name: "${IOL_EGRESS_DOCKER_NETWORK:-backend_iol-egress}"
+
+secrets:
+  mongodb-openhim-password: {file: ../secrets/mongodb-openhim-password}
+  keycloak-openhim-client-secret: {file: ../secrets/keycloak-openhim-client-secret}
+  keycloak-mediator-client-secret: {file: ../secrets/keycloak-mediator-client-secret}
+  openhim-mediator-password: {file: ../secrets/openhim-mediator-password}
+  openhim-inbound-client-password: {file: ../secrets/openhim-inbound-client-password}
+  tls-store-password: {file: ../secrets/tls-store-password}

@@ -1,0 +1,40 @@
+{
+  "contractId": "hospital-a-to-hospital-b-patient-v1",
+  "version": "1.0.0",
+  "status": "DRAFT",
+  "providerOrganizationId": "hospital-a",
+  "consumerOrganizationId": "hospital-b",
+  "direction": "OUTBOUND",
+  "standard": {
+    "standardId": "CUSTOM_PATIENT_V1",
+    "version": "1.0",
+    "adapter": "generic-json"
+  },
+  "purposes": ["continuity-of-care"],
+  "legalBasis": "A valider par les responsables habilites des deux organisations.",
+  "dataClassification": "SENSITIVE",
+  "fieldPolicy": {
+    "mode": "ALLOW_LIST",
+    "fields": ["patient_id", "birth_date", "status"]
+  },
+  "retention": {
+    "durationDays": 30,
+    "onExpiry": "DELETE"
+  },
+  "transport": {
+    "openhimChannel": "/interop/hospital-b/patient-v1",
+    "authenticationProfile": "mtls-hospital-b",
+    "tlsRequired": true,
+    "maxPayloadBytes": 10485760
+  },
+  "delivery": {
+    "mode": "ASYNCHRONOUS",
+    "idempotencyRequired": true,
+    "maxAttempts": 4
+  },
+  "validity": {
+    "validFrom": "2026-08-01T00:00:00Z",
+    "validUntil": null
+  },
+  "approvals": []
+}

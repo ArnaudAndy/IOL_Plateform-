@@ -1,0 +1,6 @@
+{
+  "patientId": "P001",
+  "birthDate": "20/05/1990",
+  "status": "UNKNOWN",
+  "extraField": "not-in-standard"
+}

@@ -1,0 +1,68 @@
+{
+  "workflowId": "wf_demo_incremental",
+  "execLogId": "log_demo_001",
+  "workflowName": "Demo incremental + projection",
+  "executionMode": "LOCAL",
+  "priority": 3,
+
+  "schedule": { "enabled": true, "frequency": "DAILY", "time": "02:00" },
+
+  "sources": [
+    {
+      "source_name": "POSTGRES",
+      "config": {
+        "uri": "postgresql://src_user:src_pass@localhost:5432/source_db",
+        "target_table": "stg_transactions",
+        "target_connection": {
+          "host": "localhost",
+          "port": "5432",
+          "database": "iol_bronze",
+          "username": "bronze_user",
+          "password": "bronze_pass",
+          "db_type": "POSTGRES",
+          "hop_connection_name": "IOL_DESTINATION_POSTGRES"
+        },
+        "source_config": { "query": "SELECT tx_id, date_op, amount, label FROM public.transactions" },
+        "fields": ["date_op", "tx_id", "amount"],
+        "load_mode": "INCREMENTAL",
+        "incremental_column": "date_op",
+        "last_watermark": "2026-06-15T02:00:00Z",
+        "write_mode": "append",
+        "silver_config": {
+          "target_table_silver": "cln_transactions",
+          "elt_scripts_silver": "SELECT * FROM stg_transactions"
+        }
+      }
+    },
+    {
+      "source_name": "CSV",
+      "config": {
+        "uri": "C:/Users/ANDY/Desktop/data/douane.csv",
+        "file_path": "C:/Users/ANDY/Desktop/data/douane.csv",
+        "target_table": "stg_douane",
+        "target_connection": {
+          "host": "localhost",
+          "port": "5432",
+          "database": "iol_bronze",
+          "username": "bronze_user",
+          "password": "bronze_pass",
+          "db_type": "POSTGRES",
+          "hop_connection_name": "IOL_DESTINATION_POSTGRES"
+        },
+        "source_config": { "delimiter": ";", "encoding": "UTF-8" },
+        "fields": ["date_op", "montant", "bureau"],
+        "load_mode": "FULL",
+        "write_mode": "append",
+        "silver_config": {
+          "target_table_silver": "cln_douane",
+          "elt_scripts_silver": "SELECT * FROM stg_douane"
+        }
+      }
+    }
+  ],
+
+  "gold_config_global": {
+    "target_table_gold": "gold.fact_operations",
+    "elt_scripts_gold": "CREATE TABLE gold.fact_operations AS SELECT * FROM cln_transactions"
+  }
+}

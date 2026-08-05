@@ -1,0 +1,173 @@
+name: IOL Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version immuable a publier
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  security-events: write
+
+jobs:
+  version:
+    name: Version immuable
+    runs-on: ubuntu-latest
+    outputs:
+      value: ${{ steps.version.outputs.value }}
+    steps:
+      - id: version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+          REF_VERSION: ${{ github.ref_name }}
+        run: |
+          value="${REQUESTED_VERSION:-${REF_VERSION}}"
+          if [[ ! "${value}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]]; then
+            echo "Version refusee: ${value}" >&2
+            exit 1
+          fi
+          echo "value=${value}" >> "${GITHUB_OUTPUT}"
+
+  quality:
+    name: Verifications avant publication
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      security-events: write
+
+  approval:
+    name: Approbation de publication
+    needs: [version, quality]
+    runs-on: ubuntu-latest
+    environment: production-release
+    steps:
+      - run: echo "Publication approuvee."
+
+  images:
+    name: Image - ${{ matrix.name }}
+    needs: [version, approval]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api-core
+            image: iol-api-core
+            context: backend/api-core
+            file: backend/api-core/Dockerfile
+          - name: pipeline-consumer
+            image: iol-pipeline-consumer
+            context: backend/pipeline-consumer
+            file: backend/pipeline-consumer/Dockerfile
+          - name: iol-mediator
+            image: iol-mediator
+            context: backend/iol-mediator
+            file: backend/iol-mediator/Dockerfile
+          - name: web
+            image: iol-web
+            context: frontend
+            file: frontend/Dockerfile
+          - name: keycloak
+            image: iol-keycloak
+            context: backend/keycloak
+            file: backend/keycloak/Dockerfile
+          - name: keycloak-realm-render
+            image: iol-keycloak-realm-render
+            context: backend/keycloak
+            file: backend/keycloak/realm-renderer.Dockerfile
+          - name: mongodb
+            image: iol-mongodb
+            context: backend/mongodb
+            file: backend/mongodb/Dockerfile
+          - name: postgres
+            image: iol-postgres
+            context: backend/postgres
+            file: backend/postgres/Dockerfile
+          - name: clamav-tls
+            image: iol-clamav-tls
+            context: backend/stunnel
+            file: backend/stunnel/Dockerfile
+          - name: openhim-core
+            image: iol-openhim-core
+            context: backend/openhim/openhim-core-privacy
+            file: backend/openhim/openhim-core-privacy/Dockerfile
+          - name: mediator-fhir
+            image: iol-mediator-fhir
+            context: backend/openhim-mediators
+            file: backend/openhim-mediators/openhim-mediator-iol-fhir/Dockerfile
+          - name: mediator-iso20022
+            image: iol-mediator-iso20022
+            context: backend/openhim-mediators
+            file: backend/openhim-mediators/openhim-mediator-iol-iso20022/Dockerfile
+          - name: mediator-edfi
+            image: iol-mediator-edfi
+            context: backend/openhim-mediators
+            file: backend/openhim-mediators/openhim-mediator-iol-edfi/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+          tags: |
+            type=ref,event=tag
+            type=raw,value=${{ needs.version.outputs.value }},enable=${{ github.event_name == 'workflow_dispatch' }}
+      - name: Construire localement pour le scan
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          load: true
+          push: false
+          tags: iol-release-scan:${{ matrix.name }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+      - name: Scan bloquant de l'image
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: iol-release-scan:${{ matrix.name }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Publier l'image immuable
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          provenance: mode=max
+          sbom: true
+      - uses: sigstore/cosign-installer@v3.8.2
+      - name: Signer l'image par identite GitHub OIDC
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          while IFS= read -r image; do
+            cosign sign --yes "${image}@${DIGEST}"
+          done <<< "${TAGS}"
+
+  release-gate:
+    name: Publication complete
+    needs: images
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Images analysees, publiees avec SBOM et signees."

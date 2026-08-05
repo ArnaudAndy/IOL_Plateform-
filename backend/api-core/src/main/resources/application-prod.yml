@@ -1,0 +1,42 @@
+spring:
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${KEYCLOAK_ISSUER_URI}
+          jwk-set-uri: ${KEYCLOAK_JWK_SET_URI}
+          audiences: ${KEYCLOAK_API_AUDIENCE:iol-api}
+
+springdoc:
+  swagger-ui:
+    enabled: false
+  api-docs:
+    enabled: false
+
+server:
+  ssl:
+    enabled: true
+    key-store: ${API_TLS_KEYSTORE:file:/run/tls/api-core.p12}
+    key-store-password: ${API_TLS_KEYSTORE_PASSWORD}
+    key-store-type: PKCS12
+    trust-store: ${IOL_TLS_TRUSTSTORE:file:/run/tls/truststore.p12}
+    trust-store-password: ${IOL_TLS_TRUSTSTORE_PASSWORD}
+    trust-store-type: PKCS12
+    client-auth: need
+
+management:
+  server:
+    port: ${MANAGEMENT_PORT:8086}
+    ssl:
+      enabled: false
+
+app:
+  auth:
+    mode: KEYCLOAK
+  credentials:
+    provider: VAULT_TRANSIT
+    environment: production
+    allow-legacy-plaintext: false
+    migrate-legacy-on-startup: true
+  security:
+    require-mtls: true
