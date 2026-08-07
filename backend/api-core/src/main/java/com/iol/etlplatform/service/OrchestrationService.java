@@ -3,6 +3,7 @@ package com.iol.etlplatform.service;
 import com.iol.etlplatform.entity.ExecutionLog;
 import com.iol.etlplatform.entity.WorkflowConfig;
 import com.iol.etlplatform.entity.enums.ExecutionStatus;
+import com.iol.etlplatform.exception.ConflictException;
 import com.iol.etlplatform.exception.ResourceNotFoundException;
 import com.iol.etlplatform.exception.BadRequestException;
 import com.iol.etlplatform.kafka.KafkaPipelineEventService;
@@ -11,23 +12,46 @@ import com.iol.etlplatform.repository.WorkflowConfigRepository;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 
 /**
  * Rôle de api-core dans l'exécution d'un pipeline :
  *
  *   1. Enregistre un log RUNNING dans MongoDB (traçabilité immédiate)
- *   2. Publie l'événement PIPELINE_EXECUTION_REQUESTED dans Kafka
+ *   2. Extrait, transporte puis publie la commande — sur un pool BORNÉ et
+ *      SÉPARÉ des threads HTTP
  *   3. C'est tout — Apache Hop (via pipeline-consumer) fait le reste
  *
  * Le statut SUCCESS/FAILED est mis à jour par le pipeline-consumer
  * via le topic iol.pipeline.status → KafkaStatusListenerService.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ *  POURQUOI LA SOUMISSION EST ASYNCHRONE
+ * ─────────────────────────────────────────────────────────────────────────
+ *  Le transport des données source tient son thread pendant toute la durée de
+ *  l'extraction — plusieurs minutes sur un volume important. Tant qu'il était
+ *  exécuté en ligne sur le thread HTTP :
+ *
+ *   - Nginx coupait `/api/` à 120 s, donc l'utilisateur recevait un 504 alors
+ *     que le transport se poursuivait et que le workflow s'exécutait vraiment ;
+ *   - une relance après ce faux échec produisait une seconde extraction, avec
+ *     un nouveau journal d'exécution que la déduplication par empreinte ne
+ *     rattrapait pas ;
+ *   - les threads Tomcat étaient consommés par les transports, jusqu'à figer
+ *     le portail d'un seul coup une fois les 200 threads pris.
+ *
+ *  La soumission rend donc la main immédiatement avec un journal en QUEUED.
+ *  Le suivi passe par ce journal et le topic de statut, qui existaient déjà.
  *
  * Dépendance directe sur WorkflowConfigRepository (pas WorkflowService)
  * pour éviter une dépendance circulaire avec WorkflowService.
@@ -42,16 +66,27 @@ public class OrchestrationService {
     private final ExecutionLogRepository executionLogRepository;
     private final KafkaPipelineEventService kafkaPipelineEventService;
 
+    @Qualifier("pipelineExecutionExecutor")
+    private final Executor pipelineExecutionExecutor;
+
     /**
-     * Déclenche l'exécution d'un pipeline.
+     * Soumet un pipeline à l'exécution et rend la main immédiatement.
+     *
      * Appelé par :
      *   - POST /api/orchestrator/run/{id}  (déclenchement manuel)
      *   - PipelineSchedulerService          (déclenchement cron automatique)
+     *
+     * @return le journal d'exécution en QUEUED. Il n'est PAS terminal : le
+     *         transport et la publication se poursuivent en arrière-plan.
+     * @throws ConflictException si une exécution est déjà en cours
+     * @throws java.util.concurrent.RejectedExecutionException si la capacité
+     *         d'exécution est saturée
      */
     public ExecutionLog runWorkflow(String workflowId) {
         WorkflowConfig workflow = workflowConfigRepository.findById(workflowId)
                 .orElseThrow(() -> new ResourceNotFoundException("Workflow introuvable: " + workflowId));
         assertCanRun(workflow);
+        assertNoActiveExecution(workflow);
 
         ExecutionLog execLog = ExecutionLog.builder()
                 .workflowId(workflowId)
@@ -62,33 +97,84 @@ public class OrchestrationService {
                 .currentStage("QUEUED")
                 .stageStatuses(initialStageStatuses())
                 .triggeredBy(currentTrigger(workflow))
-                .logOutput("Pipeline '" + workflow.getWorkflowName() + "' soumis à Hop via Kafka.\n")
+                .logOutput("Pipeline '" + workflow.getWorkflowName() + "' accepté; transport en cours.\n")
                 .build();
         execLog = executionLogRepository.save(execLog);
 
-        String kafkaResult;
+        // Le worker s'exécute hors du thread HTTP et n'hérite donc pas du
+        // contexte de sécurité. Sans propagation explicite, l'authentification y
+        // serait nulle et les contrôles de propriété des connexions
+        // (DestinationConnectionService.assertCanAccess) passeraient en silence.
+        SecurityContext securityContext = SecurityContextHolder.getContext();
+        String execLogId = execLog.getId();
         try {
-            kafkaResult = kafkaPipelineEventService.publishExecutionRequested(workflow, execLog.getId());
-        } catch (Exception error) {
-            execLog.setStatus(ExecutionStatus.FAILED);
-            execLog.setEndTime(Instant.now());
-            execLog.setCurrentStage("SUBMISSION");
-            execLog.setFailedStage("SUBMISSION");
-            execLog.setErrorMessage("La commande d'execution n'a pas pu etre publiee: " + rootMessage(error));
-            execLog.setLogOutput(execLog.getLogOutput() + execLog.getErrorMessage() + "\n");
-            execLog.setStageStatuses(Map.of("SUBMISSION", "FAILED"));
-            executionLogRepository.save(execLog);
-            if (error instanceof RuntimeException runtimeException) {
-                throw runtimeException;
-            }
-            throw new IllegalStateException(execLog.getErrorMessage(), error);
+            pipelineExecutionExecutor.execute(
+                    () -> transportAndPublish(workflowId, execLogId, securityContext));
+        } catch (RejectedExecutionException saturated) {
+            markSubmissionFailed(execLog, "Capacite d'execution saturee: " + saturated.getMessage());
+            throw saturated;
         }
 
-        execLog.setLogOutput(execLog.getLogOutput() + kafkaResult + "\n");
-        executionLogRepository.save(execLog);
-
-        log.info("Pipeline '{}' soumis. ExecutionLog id={}", workflow.getWorkflowName(), execLog.getId());
+        log.info("Pipeline '{}' accepté. ExecutionLog id={}", workflow.getWorkflowName(), execLogId);
         return execLog;
+    }
+
+    /**
+     * Extraction, transport et publication de la commande. S'exécute sur le pool
+     * borné : toute exception est consignée dans le journal, jamais propagée à un
+     * appelant — il n'y en a plus.
+     */
+    private void transportAndPublish(String workflowId, String execLogId, SecurityContext securityContext) {
+        SecurityContextHolder.setContext(securityContext);
+        try {
+            WorkflowConfig workflow = workflowConfigRepository.findById(workflowId)
+                    .orElseThrow(() -> new ResourceNotFoundException("Workflow introuvable: " + workflowId));
+            String kafkaResult = kafkaPipelineEventService.publishExecutionRequested(workflow, execLogId);
+
+            executionLogRepository.findById(execLogId).ifPresent(current -> {
+                current.setLogOutput(current.getLogOutput() + kafkaResult + "\n");
+                executionLogRepository.save(current);
+            });
+            log.info("Pipeline '{}' soumis à Kafka. ExecutionLog id={}",
+                     workflow.getWorkflowName(), execLogId);
+        } catch (Exception error) {
+            log.error("Echec du transport pour l'execution {}: {}", execLogId, rootMessage(error), error);
+            executionLogRepository.findById(execLogId).ifPresent(current ->
+                    markSubmissionFailed(current,
+                            "La commande d'execution n'a pas pu etre publiee: " + rootMessage(error)));
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
+    }
+
+    private void markSubmissionFailed(ExecutionLog execLog, String message) {
+        execLog.setStatus(ExecutionStatus.FAILED);
+        execLog.setEndTime(Instant.now());
+        execLog.setCurrentStage("SUBMISSION");
+        execLog.setFailedStage("SUBMISSION");
+        execLog.setErrorMessage(message);
+        execLog.setLogOutput(execLog.getLogOutput() + message + "\n");
+        execLog.setStageStatuses(Map.of("SUBMISSION", "FAILED"));
+        executionLogRepository.save(execLog);
+    }
+
+    /**
+     * Refuse une seconde exécution simultanée du même workflow.
+     *
+     * Deux exécutions concurrentes écriraient dans les mêmes tables Bronze,
+     * Silver et Gold. Le consumer prend déjà un verrou distribué par workflow ;
+     * refuser dès la soumission donne un message clair au lieu d'une attente
+     * silencieuse, et neutralise la relance après un faux échec.
+     *
+     * Les exécutions bloquées sont libérées par ExecutionWatchdogService, qui
+     * les bascule en FAILED au-delà de ses délais de heartbeat et de file.
+     */
+    private void assertNoActiveExecution(WorkflowConfig workflow) {
+        if (executionLogRepository.existsByWorkflowIdAndStatus(workflow.getId(), ExecutionStatus.RUNNING)) {
+            throw new ConflictException(
+                    "Une execution est deja en cours pour le workflow '" + workflow.getWorkflowName()
+                            + "'. Attendez sa fin avant d'en lancer une nouvelle.");
+        }
     }
 
     private Map<String, String> initialStageStatuses() {

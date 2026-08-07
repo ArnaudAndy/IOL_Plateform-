@@ -35,11 +35,18 @@ services:
       - api-core
     networks:
       - iol-internal
+    # `nginx -t` ne valide que la syntaxe de configuration: un Nginx fige ou
+    # incapable de servir se declarerait sain. On interroge donc reellement le
+    # port. Le code de sortie 8 de wget signale une reponse HTTP non-2xx (une
+    # redirection 301 vers HTTPS en production) — c'est une preuve de vie.
     healthcheck:
-      test: ["CMD", "nginx", "-t"]
+      test:
+        - CMD-SHELL
+        - "wget -q -O /dev/null --timeout=3 --max-redirect=0 http://127.0.0.1/ || [ $$? -eq 8 ]"
       interval: 30s
       timeout: 5s
       retries: 3
+      start_period: 10s
 
   # ── API Backend ────────────────────────────────────────────────────────────
   api-core:
@@ -48,6 +55,9 @@ services:
       dockerfile: Dockerfile
     container_name: iol-api-core
     restart: unless-stopped
+    # Meme en local, une extraction concurrente non bornee epuise la RAM de la
+    # machine. Le heap est borne dans cette limite via JAVA_TOOL_OPTIONS (image).
+    mem_limit: "${API_CORE_MEMORY_LIMIT:-4g}"
     expose:
       - "8084"          # pas de port publié — Nginx achemine
     volumes:
@@ -108,7 +118,6 @@ services:
       IOL_MAX_NDJSON_LINE_BYTES: "${IOL_MAX_NDJSON_LINE_BYTES:-134217728}"
       APP_INTEROP_IDEMPOTENCY_LEASE_SECONDS: "${INTEROP_IDEMPOTENCY_LEASE_SECONDS:-86400}"
       APP_KAFKA_DATA_TEMP_DIR:   "/var/lib/iol/transport"
-      APP_TENANCY_MODE:          "${TENANCY_MODE:-SINGLE_ORGANIZATION}"
       APP_TENANCY_DEFAULT_ORGANIZATION_ID: "${DEFAULT_ORGANIZATION_ID:-iol-default}"
       APP_LOCAL_EXTRACTION_MAX_BYTES: "${LOCAL_EXTRACTION_MAX_BYTES:-1073741824}"
       APP_LOCAL_EXTRACTION_MIN_FREE_BYTES: "${LOCAL_EXTRACTION_MIN_FREE_BYTES:-536870912}"
@@ -174,19 +183,66 @@ services:
       retries: 10
       start_period: 360s
 
+  # ── Source Gateway (lecture des sources et transport) ──────────────────────
+  # Seul service autorise a ouvrir une connexion vers la base d'un client.
+  # Aucun port publie: son entree metier est le topic des ordres de transport.
+  # Le volume d'uploads est monte en LECTURE SEULE: api-core depose et scanne,
+  # le gateway ne fait que lire un fichier deja declare sain.
+  source-gateway:
+    build:
+      context: ./source-gateway
+      dockerfile: Dockerfile
+    container_name: iol-source-gateway
+    restart: unless-stopped
+    mem_limit: "${SOURCE_GATEWAY_MEMORY_LIMIT:-4g}"
+    expose:
+      - "8087"
+    volumes:
+      - iol-upload-data:/data/iol/uploads:ro
+      - iol-gateway-transport:/var/lib/iol/transport
+    environment:
+      MONGODB_URI:               "mongodb://mongodb:27017/iol_metadata"
+      KAFKA_BOOTSTRAP_SERVERS:   "kafka:9092"
+      APP_KAFKA_TRANSPORT_TOPIC:     "iol.transport.requests"
+      APP_KAFKA_TRANSPORT_DLQ_TOPIC: "iol.transport.requests.dlq"
+      APP_KAFKA_COMMANDS_HIGH_TOPIC: "iol.pipeline.high"
+      APP_KAFKA_COMMANDS_TOPIC:      "iol.pipeline.commands"
+      APP_KAFKA_COMMANDS_LOW_TOPIC:  "iol.pipeline.low"
+      APP_UPLOAD_ROOT:           "/data/iol/uploads"
+      APP_KAFKA_DATA_TEMP_DIR:   "/var/lib/iol/transport"
+      APP_TENANCY_DEFAULT_ORGANIZATION_ID: "${DEFAULT_ORGANIZATION_ID:-iol-default}"
+      OBJECT_STORAGE_ENABLED:    "${OBJECT_STORAGE_ENABLED:-true}"
+      OBJECT_STORAGE_ENDPOINT:   "http://rustfs:9000"
+      OBJECT_STORAGE_BUCKET:     "${OBJECT_STORAGE_BUCKET:-iol-source-data}"
+      OBJECT_STORAGE_ACCESS_KEY: "${RUSTFS_ACCESS_KEY:-rustfsadmin}"
+      OBJECT_STORAGE_SECRET_KEY: "${RUSTFS_SECRET_KEY:-rustfsadmin}"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mongodb:
+        condition: service_started
+    networks:
+      - iol-internal
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8088/actuator/health/readiness"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
   # ── Pipeline Consumer (Kafka → Hop) ────────────────────────────────────────
   pipeline-consumer:
     build:
-      context: ./pipeline-consumer
-      dockerfile: Dockerfile
+      # Contexte a la racine: les moteurs Python sont copies DANS l'image.
+      context: ..
+      dockerfile: backend/pipeline-consumer/Dockerfile
     restart: unless-stopped
     expose:
       - "8085"
     volumes:
       - ${HOP_HOST_PROJECT_HOME:-../hop-project}:/opt/iol/project:ro
-      - ../moteur_universel.py:/opt/iol/engine/moteur_universel.py:ro
-      - ../mapping_engine.py:/opt/iol/engine/mapping_engine.py:ro
-      - ../spark_etl.py:/opt/iol/engine/spark_etl.py:ro
+      # Les moteurs ne sont plus montes: ils vivent dans l'image, donc signes,
+      # scannes et solidaires du tag de version.
       - iol-hop-temp:/tmp/iol                      # fichiers JSON temporaires
     environment:
       KAFKA_BOOTSTRAP_SERVERS:   "kafka:9092"
@@ -226,9 +282,7 @@ services:
       SPARK_EXECUTION_TIMEOUT_SECONDS: "${SPARK_EXECUTION_TIMEOUT_SECONDS:-3600}"
       APP_KAFKA_CONSUMER_CONCURRENCY: "${PIPELINE_CONSUMER_CONCURRENCY:-3}"
       APP_KAFKA_STATUS_HEARTBEAT_SECONDS: "${PIPELINE_STATUS_HEARTBEAT_SECONDS:-5}"
-      APP_TENANCY_MODE:            "${TENANCY_MODE:-SINGLE_ORGANIZATION}"
       APP_TENANCY_DEFAULT_ORGANIZATION_ID: "${DEFAULT_ORGANIZATION_ID:-iol-default}"
-      APP_TENANCY_ENFORCE_INTEROP_ORGANIZATION: "${ENFORCE_INTEROP_ORGANIZATION:-true}"
       EXECUTION_LOCK_MODE:         "POSTGRES"
       EXECUTION_LOCK_JDBC_URL:     "jdbc:postgresql://postgres:5432/lakehouse"
       EXECUTION_LOCK_USERNAME:     ${POSTGRES_USER:-etl_user}
@@ -464,6 +518,9 @@ volumes:
   pg_data:
   iol-hop-temp:
   iol-api-transport:
+  # Staging local du gateway, distinct de celui d'api-core: les deux services
+  # ne partagent aucun espace d'ecriture.
+  iol-gateway-transport:
   iol-upload-data:
   iol-quarantine-data:
   clamav-signatures:

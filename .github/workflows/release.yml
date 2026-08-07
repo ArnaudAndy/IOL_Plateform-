@@ -65,8 +65,12 @@ jobs:
             file: backend/api-core/Dockerfile
           - name: pipeline-consumer
             image: iol-pipeline-consumer
-            context: backend/pipeline-consumer
+            context: .
             file: backend/pipeline-consumer/Dockerfile
+          - name: source-gateway
+            image: iol-source-gateway
+            context: backend/source-gateway
+            file: backend/source-gateway/Dockerfile
           - name: iol-mediator
             image: iol-mediator
             context: backend/iol-mediator

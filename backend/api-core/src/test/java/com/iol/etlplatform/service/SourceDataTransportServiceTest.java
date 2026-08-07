@@ -43,7 +43,8 @@ class SourceDataTransportServiceTest {
                     return 2L;
                 });
         SourceDataTransportService service = new SourceDataTransportService(
-                new ObjectMapper(), provider, uploads, apiSourceClient, mock(ObjectStorageService.class));
+                new ObjectMapper(), provider, uploads, apiSourceClient, mock(ObjectStorageService.class),
+                new SourceConnectionLimiter(8, 5));
         ReflectionTestUtils.setField(service, "enabled", true);
         ReflectionTestUtils.setField(service, "tempDir", tempDir.resolve("transport").toString());
         ReflectionTestUtils.setField(service, "maxLocalExtractionBytes", 10L);
@@ -79,7 +80,8 @@ class SourceDataTransportServiceTest {
         ObjectStorageService objectStorage = mock(ObjectStorageService.class);
         when(objectStorage.isEnabled()).thenReturn(false);
         SourceDataTransportService service = new SourceDataTransportService(
-                new ObjectMapper(), provider, uploads, mock(ApiSourceClient.class), objectStorage);
+                new ObjectMapper(), provider, uploads, mock(ApiSourceClient.class), objectStorage,
+                new SourceConnectionLimiter(8, 5));
         ReflectionTestUtils.setField(service, "enabled", true);
         ReflectionTestUtils.setField(service, "chunkBytes", 65_536);
         ReflectionTestUtils.setField(service, "tempDir", tempDir.resolve("transport").toString());
@@ -116,7 +118,8 @@ class SourceDataTransportServiceTest {
                 .thenReturn(new ObjectStorageService.StoredObject(
                         "iol-source-data", "source-data/wf-1/exec-1/source.jsonl", 42, "abc123"));
         SourceDataTransportService service = new SourceDataTransportService(
-                new ObjectMapper(), provider, uploads, mock(ApiSourceClient.class), objectStorage);
+                new ObjectMapper(), provider, uploads, mock(ApiSourceClient.class), objectStorage,
+                new SourceConnectionLimiter(8, 5));
         ReflectionTestUtils.setField(service, "enabled", true);
         ReflectionTestUtils.setField(service, "tempDir", tempDir.resolve("transport").toString());
         ReflectionTestUtils.setField(service, "minFreeDiskBytes", 0L);
@@ -159,7 +162,8 @@ class SourceDataTransportServiceTest {
         when(provider.getIfAvailable()).thenReturn(kafka);
         SourceDataTransportService service = new SourceDataTransportService(
                 new ObjectMapper(), provider, uploads,
-                mock(ApiSourceClient.class), mock(ObjectStorageService.class));
+                mock(ApiSourceClient.class), mock(ObjectStorageService.class),
+                new SourceConnectionLimiter(8, 5));
         ReflectionTestUtils.setField(service, "enabled", true);
         ReflectionTestUtils.setField(service, "rowBatchRows", 100);
         ReflectionTestUtils.setField(service, "maxRowBatchEventBytes", 1024 * 1024);
@@ -214,7 +218,8 @@ class SourceDataTransportServiceTest {
                 .thenReturn(new ObjectStorageService.StoredObject(
                         "iol-source-data", "source-data/wf-1/exec-1/source.csv", 27, "abc123"));
         SourceDataTransportService service = new SourceDataTransportService(
-                new ObjectMapper(), provider, uploads, mock(ApiSourceClient.class), objectStorage);
+                new ObjectMapper(), provider, uploads, mock(ApiSourceClient.class), objectStorage,
+                new SourceConnectionLimiter(8, 5));
         ReflectionTestUtils.setField(service, "enabled", true);
 
         Map<String, Object> config = new LinkedHashMap<>();
@@ -251,7 +256,8 @@ class SourceDataTransportServiceTest {
         when(provider.getIfAvailable()).thenReturn(kafka);
         ObjectStorageService objectStorage = mock(ObjectStorageService.class);
         SourceDataTransportService service = new SourceDataTransportService(
-                new ObjectMapper(), provider, uploads, mock(ApiSourceClient.class), objectStorage);
+                new ObjectMapper(), provider, uploads, mock(ApiSourceClient.class), objectStorage,
+                new SourceConnectionLimiter(8, 5));
         ReflectionTestUtils.setField(service, "enabled", true);
         ReflectionTestUtils.setField(service, "rowBatchRows", 100);
 
@@ -290,7 +296,8 @@ class SourceDataTransportServiceTest {
                 provider,
                 mock(UploadedFileService.class),
                 mock(ApiSourceClient.class),
-                mock(ObjectStorageService.class));
+                mock(ObjectStorageService.class),
+                new SourceConnectionLimiter(8, 5));
         configureInboundStream(service);
         Map<String, Object> command = inboundCommand();
         byte[] ndjson = ("{\"student_id\":\"S001\",\"grade\":5}\n"
@@ -350,7 +357,8 @@ class SourceDataTransportServiceTest {
                 provider,
                 mock(UploadedFileService.class),
                 mock(ApiSourceClient.class),
-                objectStorage);
+                objectStorage,
+                new SourceConnectionLimiter(8, 5));
         configureInboundStream(service);
         ReflectionTestUtils.setField(service, "inboundBigDataRowThreshold", 2L);
         Map<String, Object> command = inboundCommand();
@@ -387,7 +395,8 @@ class SourceDataTransportServiceTest {
                 provider,
                 mock(UploadedFileService.class),
                 mock(ApiSourceClient.class),
-                mock(ObjectStorageService.class));
+                mock(ObjectStorageService.class),
+                new SourceConnectionLimiter(8, 5));
         configureInboundStream(service);
         Map<String, Object> command = inboundCommand();
         byte[] ndjson = "{\"student_id\":\"S001\"}\n{\"other\":\"S002\"}\n".getBytes();

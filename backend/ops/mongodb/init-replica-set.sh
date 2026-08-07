@@ -47,6 +47,41 @@ mongosh ${MONGO_ARGS} \
     }
   "
 
+# Compte du source-gateway.
+#
+# Il LIT la configuration des workflows et des connexions, mais ne doit jamais
+# la modifier: creer ou modifier un workflow reste une action d'api-core,
+# declenchee par un utilisateur authentifie.
+#
+# Seule exception, indispensable: il ecrit ses propres reservations d'execution
+# dans 'transport_claims'. Un role 'read' global ne suffirait donc pas, et un
+# 'readWrite' global annulerait le confinement. D'ou ce role sur mesure, avec
+# l'ecriture limitee a cette unique collection.
+mongosh ${MONGO_ARGS} \
+  --username "${MONGO_INITDB_ROOT_USERNAME}" --password "${ROOT_PASSWORD}" \
+  --authenticationDatabase admin --eval "
+    const appDb = db.getSiblingDB('iol_metadata');
+    if (!appDb.getRole('iolSourceGateway')) {
+      appDb.createRole({
+        role: 'iolSourceGateway',
+        privileges: [
+          {
+            resource: { db: 'iol_metadata', collection: 'transport_claims' },
+            actions: ['find', 'insert', 'update', 'createIndex']
+          }
+        ],
+        roles: [{ role: 'read', db: 'iol_metadata' }]
+      });
+    }
+    if (!appDb.getUser('${MONGODB_GATEWAY_USERNAME:-iol_gateway}')) {
+      appDb.createUser({
+        user: '${MONGODB_GATEWAY_USERNAME:-iol_gateway}',
+        pwd: '${GATEWAY_PASSWORD:-${APP_PASSWORD}}',
+        roles: [{ role: 'iolSourceGateway', db: 'iol_metadata' }]
+      });
+    }
+  "
+
 mongosh ${MONGO_ARGS} \
   --username "${MONGO_INITDB_ROOT_USERNAME}" --password "${ROOT_PASSWORD}" \
   --authenticationDatabase admin --eval "

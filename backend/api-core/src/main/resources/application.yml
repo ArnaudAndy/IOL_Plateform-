@@ -59,6 +59,21 @@ spring:
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # Les lots de lignes d'un meme transfert partagent la cle d'execution, donc
+      # la meme partition. L'idempotence garantit qu'un renvoi apres erreur
+      # reseau ne duplique ni ne reordonne les lots: c'est ce qui autorise a
+      # empiler les envois sans attendre l'accuse de chacun.
+      acks: all
+      retries: 10
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        delivery.timeout.ms: 300000
+        # Regroupe les petits lots avant emission plutot que de payer un
+        # aller-retour reseau par lot.
+        linger.ms: ${APP_KAFKA_PRODUCER_LINGER_MS:20}
+        batch.size: ${APP_KAFKA_PRODUCER_BATCH_SIZE:131072}
+        compression.type: ${APP_KAFKA_PRODUCER_COMPRESSION:lz4}
 
 springdoc:
   api-docs:
@@ -173,8 +188,11 @@ app:
     max-stream-bytes: ${IOL_MAX_STREAM_BYTES:10737418240}
     max-ndjson-line-bytes: ${IOL_MAX_NDJSON_LINE_BYTES:134217728}
 
+  # La plateforme est mono-organisation par construction. L'identifiant ci-dessous
+  # reste la constante technique qui partitionne les clés Kafka, les chemins RustFS
+  # et les claims d'idempotence. Il n'existe aucun commutateur multi-organisation :
+  # le réintroduire suppose d'implémenter d'abord l'isolation runtime complète.
   tenancy:
-    mode: ${APP_TENANCY_MODE:SINGLE_ORGANIZATION}
     default-organization-id: ${APP_TENANCY_DEFAULT_ORGANIZATION_ID:iol-default}
 
   jwt:
@@ -237,6 +255,18 @@ app:
       jdbc-rows-per-partition: ${SPARK_JDBC_ROWS_PER_PARTITION:500000}
       jdbc-max-partitions: ${SPARK_JDBC_MAX_PARTITIONS:32}
       file-size-threshold-bytes: ${SPARK_FILE_SIZE_THRESHOLD_BYTES:2147483648}
+
+  # Capacite d'execution: borne le nombre de transports simultanes. Un transport
+  # tient son thread pendant toute l'extraction; sans plafond, N executions
+  # concurrentes epuisent les threads HTTP puis le heap. Au-dela de
+  # pool-size + queue-capacity, la soumission est refusee explicitement (429).
+  execution:
+    pool-size: ${APP_EXECUTION_POOL_SIZE:4}
+    queue-capacity: ${APP_EXECUTION_QUEUE_CAPACITY:32}
+    # Nombre maximal de connexions source ouvertes simultanement, tous workflows
+    # confondus. Protege autant IOL que les bases sources des clients.
+    max-source-connections: ${APP_EXECUTION_MAX_SOURCE_CONNECTIONS:8}
+    source-connection-wait-seconds: ${APP_EXECUTION_SOURCE_CONNECTION_WAIT_SECONDS:60}
 
   scheduler:
     enabled: ${SCHEDULER_ENABLED:true}

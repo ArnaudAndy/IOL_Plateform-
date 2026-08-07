@@ -1,0 +1,96 @@
+# ============================================================================
+# source-gateway — passerelle de lecture des sources
+#
+# Ce service n'expose aucun port public. Son entree metier est le topic des
+# ordres de transport; son interface interne (decouverte, estimation) sera
+# protegee par mTLS sur le reseau isole.
+# ============================================================================
+
+spring:
+  application:
+    name: source-gateway
+
+  # Metadonnees de workflow, en LECTURE SEULE. Le compte MongoDB de ce service
+  # ne doit disposer d'aucun droit d'ecriture: il lit une configuration, il ne
+  # la modifie jamais.
+  data:
+    mongodb:
+      uri: ${MONGODB_URI:mongodb://localhost:27017/iol_metadata?serverSelectionTimeoutMS=3000&connectTimeoutMS=3000}
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # Memes garanties que dans api-core: les lots d'un transfert partagent la
+      # cle d'execution donc la partition, et l'idempotence interdit qu'un
+      # renvoi apres erreur reseau duplique ou reordonne.
+      acks: all
+      retries: 10
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        delivery.timeout.ms: 300000
+        linger.ms: ${APP_KAFKA_PRODUCER_LINGER_MS:20}
+        batch.size: ${APP_KAFKA_PRODUCER_BATCH_SIZE:131072}
+        compression.type: ${APP_KAFKA_PRODUCER_COMPRESSION:lz4}
+
+server:
+  port: ${SERVER_PORT:8087}
+
+management:
+  server:
+    port: ${MANAGEMENT_PORT:8088}
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+        add-additional-paths: true
+      group:
+        readiness:
+          include: readinessState,mongo
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+
+logging:
+  level:
+    root: INFO
+    com.iol.etlplatform.sourcegateway: DEBUG
+
+app:
+  tenancy:
+    default-organization-id: ${APP_TENANCY_DEFAULT_ORGANIZATION_ID:iol-default}
+
+  kafka:
+    topics:
+      transport-requests: ${APP_KAFKA_TRANSPORT_TOPIC:iol.transport.requests}
+      transport-dlq:      ${APP_KAFKA_TRANSPORT_DLQ_TOPIC:iol.transport.requests.dlq}
+      # Topics de commande en sortie, choisis selon la priorite du workflow.
+      commands:
+        high:    ${APP_KAFKA_COMMANDS_HIGH_TOPIC:iol.pipeline.high}
+        default: ${APP_KAFKA_COMMANDS_TOPIC:iol.pipeline.commands}
+        low:     ${APP_KAFKA_COMMANDS_LOW_TOPIC:iol.pipeline.low}
+    consumer:
+      group: ${APP_KAFKA_CONSUMER_GROUP:source-gateway-group}
+      # Un transport est long et gourmand: on monte en charge en ajoutant des
+      # instances, pas des threads dans une meme instance.
+      concurrency: ${APP_KAFKA_CONSUMER_CONCURRENCY:2}
+      max-poll-records: 1
+      # Marge large: sans elle, un gros transport declencherait un rebalance en
+      # pleine extraction.
+      max-poll-interval-ms: ${APP_KAFKA_MAX_POLL_INTERVAL_MS:1800000}
+
+  execution:
+    # Duree du bail de reservation d'une execution. Au-dela, une autre instance
+    # peut reprendre le travail d'un processus disparu.
+    claim-lease-seconds: ${APP_EXECUTION_CLAIM_LEASE_SECONDS:1800}
+    max-source-connections: ${APP_EXECUTION_MAX_SOURCE_CONNECTIONS:8}
+    source-connection-wait-seconds: ${APP_EXECUTION_SOURCE_CONNECTION_WAIT_SECONDS:60}

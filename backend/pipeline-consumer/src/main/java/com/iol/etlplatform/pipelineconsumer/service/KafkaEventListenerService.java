@@ -50,14 +50,8 @@ public class KafkaEventListenerService {
     private final KafkaDataChunkStore dataChunkStore;
     private final DistributedExecutionLockService executionLockService;
 
-    @Value("${app.tenancy.mode:SINGLE_ORGANIZATION}")
-    private String tenancyMode = "SINGLE_ORGANIZATION";
-
     @Value("${app.tenancy.default-organization-id:iol-default}")
     private String defaultOrganizationId = "iol-default";
-
-    @Value("${app.tenancy.enforce-interop-organization:false}")
-    private boolean enforceInteropOrganization;
 
     public KafkaEventListenerService(
             PipelineOrchestrator orchestrator,
@@ -187,14 +181,16 @@ public class KafkaEventListenerService {
         return "workflow:" + workflowId;
     }
 
+    /**
+     * Refuse tout événement interop qui ne porte pas l'organisation unique de la
+     * plateforme, et dont la clé Kafka n'est pas partitionnée par cette organisation.
+     * La vérification est inconditionnelle : la plateforme est mono-organisation et
+     * le producteur émet toujours une clé de la forme {organizationId}:{workflowId}.
+     */
     private void validateInteropOrganization(JsonNode event, String kafkaKey, String eventType) {
         boolean interopEvent = "INBOUND".equalsIgnoreCase(event.path("direction").asText(""))
                 || event.hasNonNull("organizationId");
-        if (!enforceInteropOrganization || !interopEvent) return;
-        if (!"SINGLE_ORGANIZATION".equalsIgnoreCase(tenancyMode)) {
-            throw new IllegalStateException(
-                    "Le runtime multi-organisation interop n'est pas encore activé.");
-        }
+        if (!interopEvent) return;
 
         String organizationId = event.path("organizationId").asText("");
         if (!defaultOrganizationId.equals(organizationId)) {

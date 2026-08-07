@@ -20,6 +20,14 @@ public interface ExecutionLogRepository extends MongoRepository<ExecutionLog, St
      */
     Optional<ExecutionLog> findFirstByWorkflowIdAndStatusOrderByEndTimeDesc(String workflowId, ExecutionStatus status);
 
+    /**
+     * Vrai si une execution du workflow est deja active. Sert a refuser une
+     * seconde soumission simultanee, qui ecrirait dans les memes tables Bronze,
+     * Silver et Gold. Les executions bloquees sont liberees par
+     * ExecutionWatchdogService, qui les bascule en FAILED.
+     */
+    boolean existsByWorkflowIdAndStatus(String workflowId, ExecutionStatus status);
+
     @Query("{ 'status': 'RUNNING', 'last_heartbeat_at': { $lt: ?0 } }")
     List<ExecutionLog> findRunningWithStaleHeartbeat(Instant cutoff);
 

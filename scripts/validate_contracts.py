@@ -31,7 +31,23 @@ def main() -> int:
             print(f"ERROR {example.relative_to(ROOT)} {location}: {error.message}", file=sys.stderr)
 
     for path in sorted(CONTRACTS.glob("*.schema.json")):
-        Draft202012Validator.check_schema(load(path))
+        schema_document = load(path)
+        Draft202012Validator.check_schema(schema_document)
+
+        # Un schema dont les propres exemples ne valident plus signale une derive
+        # entre le contrat et ce que les services echangent reellement.
+        own_validator = Draft202012Validator(schema_document, format_checker=FormatChecker())
+        for index, example in enumerate(schema_document.get("examples", [])):
+            errors = sorted(own_validator.iter_errors(example), key=lambda item: list(item.path))
+            if not errors:
+                continue
+            failures += 1
+            for error in errors:
+                location = ".".join(str(part) for part in error.path) or "$"
+                print(
+                    f"ERROR {path.relative_to(ROOT)} examples[{index}] {location}: {error.message}",
+                    file=sys.stderr,
+                )
         print(f"SCHEMA OK {path.relative_to(ROOT)}")
 
     return 1 if failures else 0

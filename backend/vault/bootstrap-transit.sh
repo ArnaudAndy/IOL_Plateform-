@@ -40,6 +40,19 @@ chmod 700 "${OUTPUT_DIR}"
 vault read -field=role_id auth/approle/role/iol-api-core/role-id > "${OUTPUT_DIR}/vault-api-role-id"
 vault write -f -field=secret_id auth/approle/role/iol-api-core/secret-id > "${OUTPUT_DIR}/vault-api-secret-id"
 
+# Identite distincte pour le source-gateway. Sa politique ne permet QUE le
+# dechiffrement: il ouvre des sources, il n'en enregistre jamais. Une identite
+# partagee avec api-core annulerait tout le benefice du confinement.
+vault policy write iol-source-gateway /vault/policies/iol-source-gateway.hcl
+vault write auth/approle/role/iol-source-gateway \
+  token_policies=iol-source-gateway \
+  token_ttl=15m token_max_ttl=1h \
+  secret_id_ttl=0 secret_id_num_uses=0
+vault read -field=role_id auth/approle/role/iol-source-gateway/role-id \
+  > "${OUTPUT_DIR}/vault-source-gateway-role-id"
+vault write -f -field=secret_id auth/approle/role/iol-source-gateway/secret-id \
+  > "${OUTPUT_DIR}/vault-source-gateway-secret-id"
+
 vault policy write iol-backup /vault/policies/iol-backup.hcl
 vault write auth/approle/role/iol-backup \
   token_policies=iol-backup \

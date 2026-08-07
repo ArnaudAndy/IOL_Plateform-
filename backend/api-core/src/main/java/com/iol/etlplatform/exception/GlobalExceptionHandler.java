@@ -12,6 +12,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 
+import java.util.concurrent.RejectedExecutionException;
 import java.util.stream.Collectors;
 
 @ControllerAdvice
@@ -22,6 +23,24 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ResourceNotFoundException.class)
     public ResponseEntity<ApiResponse<String>> handleNotFound(ResourceNotFoundException ex) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ApiResponse<>(ex.getMessage(), null));
+    }
+
+    /** Une execution est deja en cours pour cette ressource: rejouable plus tard. */
+    @ExceptionHandler(ConflictException.class)
+    public ResponseEntity<ApiResponse<String>> handleConflict(ConflictException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(new ApiResponse<>(ex.getMessage(), null));
+    }
+
+    /**
+     * Capacite d'execution saturee. Un 429 explicite avec Retry-After vaut mieux
+     * qu'un 500 ou qu'une attente indefinie: le client sait qu'il peut reessayer.
+     */
+    @ExceptionHandler(RejectedExecutionException.class)
+    public ResponseEntity<ApiResponse<String>> handleSaturated(RejectedExecutionException ex) {
+        log.warn("Capacite d'execution saturee: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header("Retry-After", "30")
+                .body(new ApiResponse<>(ex.getMessage(), null));
     }
 
     @ExceptionHandler(BadRequestException.class)

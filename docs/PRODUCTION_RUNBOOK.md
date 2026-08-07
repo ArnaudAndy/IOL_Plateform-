@@ -20,7 +20,7 @@ etre obtenues dans l'environnement cible.
 | MongoDB | replica set a 3 membres, TLS et comptes limites | election et restauration sur trois hotes |
 | RustFS | 4 noeuds, TLS, KMS Vault et load balancer | version cible certifiee et perte de disque/hote |
 | Sauvegarde | cycle, empreintes, restauration isolee, Restic | Vault inclus et restauration hors site chronometree |
-| Livraison | images immuables, scan, SBOM, provenance, signature | protections GitHub et environnement d'approbation actifs |
+| Livraison | images immuables, scan, SBOM, provenance, signature ; moteurs Python embarques dans l'image | protections GitHub et environnement d'approbation actifs |
 | Multi-organisation | contrats seulement | **NO-GO** ; garder `SINGLE_ORGANIZATION` |
 
 RustFS est actuellement epingle sur une version beta dont le mode distribue et
@@ -242,6 +242,32 @@ le depot hors site.
 
 ## 9. Charge, panne et reprise
 
+### Points de defaillance unique restants
+
+Kafka, MongoDB, RustFS et Keycloak sont replliques. **PostgreSQL et Nginx ne le
+sont pas**, et aucun fichier Compose ne peut honnetement corriger cela sur un
+hote unique.
+
+| Composant | Effet de la perte | Pourquoi Compose ne suffit pas |
+| --- | --- | --- |
+| PostgreSQL | Le verrou d'execution distribue disparait : les consumers ne peuvent plus reclamer de travail, meme si Kafka, Mongo et RustFS sont sains. Les comptes locaux et les jetons de rafraichissement deviennent inaccessibles. | Ajouter un second conteneur sans orchestrateur de replication produit une divergence silencieuse et un risque de split-brain. C'est **pire** qu'un noeud unique, parce que cela cree une fausse confiance. |
+| Nginx | Plus aucun acces exterieur, meme si tous les services internes sont sains. C'est le seul composant qui publie des ports. | Des replicas se disputeraient les ports 80 et 443 du meme hote. La repartition exige une adresse flottante ou un repartiteur en amont. |
+
+Traitements reels, hors Compose :
+
+- **PostgreSQL** : Patroni ou repmgr avec bascule automatique, ou une instance
+  geree par l'hebergeur. Router les clients via un point d'entree unique
+  (PgBouncer, HAProxy ou le point de terminaison du service gere) afin que la
+  bascule reste transparente pour `api-core` et le `pipeline-consumer`.
+- **Nginx** : deux hotes avec `keepalived` et une adresse IP virtuelle, ou un
+  repartiteur en amont, ou une entree d'orchestrateur. Le certificat et la
+  politique CORS doivent etre identiques sur chaque instance.
+
+Tant que ces deux points ne sont pas traites, la plateforme reste une topologie
+**mono-hote a redondance partielle** : elle survit a la perte d'un broker, d'un
+membre Mongo ou d'un noeud RustFS, mais pas a la perte de sa base de verrous ni
+de sa porte d'entree.
+
 ### Charge
 
 ```bash
@@ -350,7 +376,8 @@ une preuve datee :
 - [ ] Monitoring, alertes et astreinte testes.
 - [ ] Audit de securite independant et traitement des constats termines.
 - [ ] Contrats FHIR/ISO 20022/Ed-Fi signes avec chaque partenaire.
-- [ ] `TENANCY_MODE=SINGLE_ORGANIZATION` tant que l'isolation n'est pas prouvee.
+- [x] Mono-organisation verrouille dans le code : aucun commutateur de mode
+      n'existe, le multi-organisation ne peut pas etre active par configuration.
 
 Un seul echec sur un controle de secret, d'integrite, de restauration,
 d'authentification ou d'isolation impose un `NO-GO`.

@@ -38,6 +38,10 @@ public class ProductionSecurityGuard implements SmartInitializingSingleton {
         requireStartsWith(failures, "app.credentials.vault.address", "https://");
         requireStartsWith(failures, "spring.security.oauth2.resourceserver.jwt.issuer-uri", "https://");
         requireStartsWith(failures, "app.object-storage.endpoint", "https://");
+        // Hibernate ne doit pas pouvoir alterer le schema de la base cible au
+        // demarrage: une migration de schema est une operation planifiee, avec
+        // sauvegarde et retour arriere, pas un effet de bord d'un redemarrage.
+        requireEquals(failures, "spring.jpa.hibernate.ddl-auto", "validate");
         requireEquals(failures, "app.malware-scan.enabled", "true");
         requireEquals(failures, "app.malware-scan.fail-closed", "true");
         requireEquals(failures, "app.malware-scan.clamav.tls-enabled", "true");

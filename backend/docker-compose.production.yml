@@ -224,6 +224,14 @@ services:
       keycloak-bootstrap:
         condition: service_completed_successfully
     networks: [iol-internal, iol-egress, iol-vault]
+    # api-core porte le transport des donnees source: sans plafond, une extraction
+    # concurrente consomme la RAM de l'hote et emporte l'API, le portail et les
+    # probes qui vivent dans la meme JVM. MaxRAMPercentage borne le heap DANS la
+    # limite du conteneur; les deux sont necessaires.
+    deploy:
+      resources:
+        limits: {cpus: "4", memory: 6G}
+        reservations: {cpus: "1", memory: 2G}
     security_opt: ["no-new-privileges:true"]
 
   pipeline-consumer:
@@ -266,9 +274,10 @@ services:
       SPARK_CONF_DIR: "/tmp/iol/spark-conf"
     volumes:
       - ${HOP_HOST_PROJECT_HOME:-../hop-project}:/opt/iol/project:ro
-      - ../moteur_universel.py:/opt/iol/engine/moteur_universel.py:ro
-      - ../mapping_engine.py:/opt/iol/engine/mapping_engine.py:ro
-      - ../spark_etl.py:/opt/iol/engine/spark_etl.py:ro
+      # Les moteurs Python ne sont PLUS montes depuis l'hote: ils sont embarques
+      # dans l'image immuable, donc couverts par la signature cosign, les SBOM
+      # et le scan Trivy. Les remonter ici reintroduirait du code de
+      # transformation non trace et insensible au retour arriere.
       - iol-hop-temp:/tmp/iol
       - ./secrets/runtime-tls/pipeline-consumer:/run/tls:ro
     secrets:

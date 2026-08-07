@@ -77,7 +77,7 @@ class SourceLoadEstimatorServiceTest {
     }
 
     private SourceLoadEstimatorService service(UploadedFileService uploads) {
-        SourceLoadEstimatorService service = new SourceLoadEstimatorService(uploads);
+        SourceLoadEstimatorService service = new SourceLoadEstimatorService(uploads, new SourceConnectionLimiter(8, 5));
         ReflectionTestUtils.setField(service, "enabled", true);
         ReflectionTestUtils.setField(service, "jdbcQueryTimeoutSeconds", 1);
         ReflectionTestUtils.setField(service, "jdbcUnknownMode", "SPARK");

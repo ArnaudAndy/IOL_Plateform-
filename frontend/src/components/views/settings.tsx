@@ -23,6 +23,14 @@ export function SettingsView() {
   const [savingProfile, setSavingProfile] = useState(false)
   const [savingPassword, setSavingPassword] = useState(false)
 
+  // Doit rester avant tout retour conditionnel : les hooks s'appellent dans le
+  // meme ordre a chaque rendu. Place apres le retour Keycloak, cet effet violait
+  // les regles des hooks et faisait echouer le lint, donc la CI.
+  useEffect(() => {
+    setName(user?.name ?? '')
+    setEmail(user?.email ?? '')
+  }, [user])
+
   if (keycloakEnabled) {
     return (
       <div className="mx-auto w-full max-w-7xl">
@@ -46,11 +54,6 @@ export function SettingsView() {
       </div>
     )
   }
-
-  useEffect(() => {
-    setName(user?.name ?? '')
-    setEmail(user?.email ?? '')
-  }, [user])
 
   async function saveProfile(event: React.FormEvent) {
     event.preventDefault()

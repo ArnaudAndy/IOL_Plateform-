@@ -891,9 +891,11 @@ public class WorkflowService {
         if (!workflow.isActive()) {
             throw new BadRequestException("Le workflow n'est pas actif.");
         }
-        log.info("Soumission du workflow via Kafka: {}", workflowId);
+        log.info("Soumission du workflow: {}", workflowId);
         com.iol.etlplatform.entity.ExecutionLog execLog = orchestrationService.runWorkflow(workflowId);
-        return "Workflow soumis à Kafka. ExecutionLog id=" + execLog.getId();
+        // Le transport se poursuit en arriere-plan: ne pas affirmer que la
+        // commande est deja publiee dans Kafka.
+        return "Workflow accepte; transport en cours. ExecutionLog id=" + execLog.getId();
     }
 
     // ==================== FILE DISCOVERY ====================

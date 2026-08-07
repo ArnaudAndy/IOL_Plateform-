@@ -1,4 +1,13 @@
 spring:
+  # En production, Hibernate ne doit jamais modifier le schema: il le VERIFIE et
+  # refuse de demarrer s'il ne correspond pas. Le profil de base utilise `update`
+  # pour le confort du developpement, ce qui laisserait Hibernate alterer la base
+  # cible a chaque demarrage. Les evolutions de schema passent par une migration
+  # versionnee, avec sauvegarde et plan de retour arriere.
+  jpa:
+    hibernate:
+      ddl-auto: validate
+
   security:
     oauth2:
       resourceserver:

@@ -30,6 +30,7 @@ public class SourceLoadEstimatorService {
     private static final List<String> SPARK_FILE_PROTOCOLS = List.of("CSV", "JSON", "PARQUET", "ORC");
 
     private final UploadedFileService uploadedFileService;
+    private final SourceConnectionLimiter sourceConnectionLimiter;
 
     @Value("${app.spark.auto-selection.enabled:true}")
     private boolean enabled;
@@ -121,6 +122,14 @@ public class SourceLoadEstimatorService {
     }
 
     long estimateJdbcRows(String protocol, Map<String, Object> config, long rowThreshold) throws Exception {
+        // L'estimation s'execute sur un thread HTTP, non borne: sans permis, N
+        // requetes concurrentes ouvrent N connexions vers la base du client.
+        return sourceConnectionLimiter.withPermit("estimation JDBC",
+                () -> estimateJdbcRowsWithConnection(protocol, config, rowThreshold));
+    }
+
+    private long estimateJdbcRowsWithConnection(
+            String protocol, Map<String, Object> config, long rowThreshold) throws Exception {
         Map<String, Object> sourceConfig = map(config.get("source_config"));
         String query = string(sourceConfig.get("query"));
         if (query.isBlank()) {

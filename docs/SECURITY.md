@@ -136,11 +136,16 @@ ne rend pas les anciennes valeurs sures.
 
 ## Multi-organisation
 
-La configuration supporte actuellement une organisation runtime par defaut.
+La plateforme est mono-organisation par construction. Il n'existe aucun
+commutateur de mode : `DEFAULT_ORGANIZATION_ID` est une constante technique qui
+partitionne les cles Kafka, les chemins RustFS et les claims d'idempotence.
+
 Les schemas de contrat contiennent `organization_id`, mais l'ouverture a des
-organisations independantes est un NO-GO tant que tous les acces MongoDB,
+organisations independantes reste un NO-GO tant que tous les acces MongoDB,
 PostgreSQL, Kafka, RustFS, cache et audit ne sont pas filtres et testes par
-tenant. `TENANCY_MODE=SINGLE_ORGANIZATION` doit rester actif jusque-la.
+tenant. La reintroduire suppose d'implementer d'abord l'isolation runtime
+decrite dans `docs/CONTRATS_PARTAGE_ISOLATION_MULTI_ORGANISATION.md`, puis de
+reintroduire explicitement un commutateur.
 
 ## Incidents
 

@@ -61,6 +61,7 @@ public class SourceDataTransportService {
     private final UploadedFileService uploadedFileService;
     private final ApiSourceClient apiSourceClient;
     private final ObjectStorageService objectStorageService;
+    private final SourceConnectionLimiter sourceConnectionLimiter;
 
     @Value("${app.kafka.data-transport.enabled:true}")
     private boolean enabled;
@@ -76,6 +77,14 @@ public class SourceDataTransportService {
 
     @Value("${app.kafka.data-transport.max-row-batch-event-bytes:8388608}")
     private int maxRowBatchEventBytes;
+
+    /**
+     * Nombre de lots Kafka laissés en vol avant d'attendre le plus ancien.
+     * Borne à la fois la mémoire du producteur et la latence de détection d'une
+     * erreur d'envoi.
+     */
+    @Value("${app.kafka.data-transport.max-in-flight-batches:64}")
+    private int kafkaMaxInFlightBatches;
 
     @Value("${app.interop.big-data.row-threshold:${SPARK_ROW_THRESHOLD:10000000}}")
     private long inboundBigDataRowThreshold;
@@ -332,6 +341,7 @@ public class SourceDataTransportService {
 
         String transferId = UUID.randomUUID().toString();
         StreamAccumulator state = new StreamAccumulator();
+        SendWindow window = new SendWindow(kafkaMaxInFlightBatches);
         List<List<Object>> batch =
                 new ArrayList<>(Math.max(10, Math.min(rowBatchRows, 2_000)));
         MessageDigest digest;
@@ -379,7 +389,8 @@ public class SourceDataTransportService {
                             state.headers,
                             new ArrayList<>(batch),
                             "inbound-pivot.jsonl",
-                            organizationId);
+                            organizationId,
+                            window);
                     batch.clear();
                 }
             });
@@ -401,8 +412,11 @@ public class SourceDataTransportService {
                         state.headers,
                         new ArrayList<>(batch),
                         "inbound-pivot.jsonl",
-                        organizationId);
+                        organizationId,
+                        window);
             }
+            // Le manifeste ne doit decrire que des lots reellement acquittes.
+            window.awaitAll();
         } catch (Exception error) {
             publishTransferAbort(
                     kafka,
@@ -601,6 +615,7 @@ public class SourceDataTransportService {
         catch (Exception error) { throw new IllegalStateException(error); }
 
         List<List<Object>> batch = new ArrayList<>(maxRows);
+        SendWindow window = new SendWindow(kafkaMaxInFlightBatches);
         int batchIndex = 0;
         long canonicalBytes = 0;
         try {
@@ -614,7 +629,7 @@ public class SourceDataTransportService {
                     batchIndex += sendRowBatch(
                             kafka, topic, key, workflowId, execLogId, transferId, 0,
                             batchIndex, headers, new ArrayList<>(batch),
-                            "inbound-pivot.jsonl", organizationId);
+                            "inbound-pivot.jsonl", organizationId, window);
                     batch.clear();
                 }
             }
@@ -622,8 +637,10 @@ public class SourceDataTransportService {
                 batchIndex += sendRowBatch(
                         kafka, topic, key, workflowId, execLogId, transferId, 0,
                         batchIndex, headers, new ArrayList<>(batch),
-                        "inbound-pivot.jsonl", organizationId);
+                        "inbound-pivot.jsonl", organizationId, window);
             }
+            // Le manifeste ne doit decrire que des lots reellement acquittes.
+            window.awaitAll();
         } catch (Exception error) {
             if (error instanceof BadRequestException badRequest) throw badRequest;
             throw new BadRequestException("Transport INBOUND vers Kafka impossible: " + rootMessage(error));
@@ -707,6 +724,7 @@ public class SourceDataTransportService {
         List<List<Object>> batch = new ArrayList<>(maxRows);
         final List<String>[] headersRef = new List[]{List.of()};
         final long[] counters = new long[]{batchIndex, canonicalBytes, rowCount};
+        SendWindow window = new SendWindow(kafkaMaxInFlightBatches);
         try {
             streamJdbcRows(protocol, config, (headers, values) -> {
                 headersRef[0] = headers;
@@ -718,15 +736,17 @@ public class SourceDataTransportService {
                 if (batch.size() >= maxRows) {
                     counters[0] += sendRowBatch(kafka, topic, key, workflowId, execLogId, transferId,
                             sourceIndex, (int) counters[0], headers, new ArrayList<>(batch),
-                            "jdbc-source-" + sourceIndex + ".jsonl");
+                            "jdbc-source-" + sourceIndex + ".jsonl", window);
                     batch.clear();
                 }
             });
             if (!batch.isEmpty() || counters[0] == 0) {
                 counters[0] += sendRowBatch(kafka, topic, key, workflowId, execLogId, transferId,
                         sourceIndex, (int) counters[0], headersRef[0], new ArrayList<>(batch),
-                        "jdbc-source-" + sourceIndex + ".jsonl");
+                        "jdbc-source-" + sourceIndex + ".jsonl", window);
             }
+            // Le manifeste ne doit decrire que des lots reellement acquittes.
+            window.awaitAll();
         } catch (Exception error) {
             if (error instanceof BadRequestException badRequest) throw badRequest;
             if (error instanceof KafkaRowTooLargeException oversized) throw oversized;
@@ -760,10 +780,11 @@ public class SourceDataTransportService {
             int batchIndex,
             List<String> headers,
             List<List<Object>> rows,
-            String fileName) throws Exception {
+            String fileName,
+            SendWindow window) throws Exception {
         return sendRowBatch(
                 kafka, topic, key, workflowId, execLogId, transferId, sourceIndex,
-                batchIndex, headers, rows, fileName, null);
+                batchIndex, headers, rows, fileName, null, window);
     }
 
     private int sendRowBatch(
@@ -778,7 +799,8 @@ public class SourceDataTransportService {
             List<String> headers,
             List<List<Object>> rows,
             String fileName,
-            String organizationId) throws Exception {
+            String organizationId,
+            SendWindow window) throws Exception {
         Map<String, Object> event = new LinkedHashMap<>();
         event.put("eventType", "PIPELINE_SOURCE_ROW_BATCH");
         event.put("workflowId", workflowId);
@@ -801,13 +823,14 @@ public class SourceDataTransportService {
             }
             int middle = rows.size() / 2;
             int firstCount = sendRowBatch(kafka, topic, key, workflowId, execLogId, transferId,
-                    sourceIndex, batchIndex, headers, rows.subList(0, middle), fileName, organizationId);
+                    sourceIndex, batchIndex, headers, rows.subList(0, middle), fileName,
+                    organizationId, window);
             int secondCount = sendRowBatch(kafka, topic, key, workflowId, execLogId, transferId,
                     sourceIndex, batchIndex + firstCount, headers, rows.subList(middle, rows.size()),
-                    fileName, organizationId);
+                    fileName, organizationId, window);
             return firstCount + secondCount;
         }
-        kafka.send(topic, key, json).get(60, TimeUnit.SECONDS);
+        window.send(kafka, topic, key, json);
         return 1;
     }
 
@@ -866,6 +889,16 @@ public class SourceDataTransportService {
     }
 
     private void streamJdbcRows(
+            String protocol, Map<String, Object> config, JdbcRowConsumer consumer) throws Exception {
+        // Un transport tient sa connexion source pendant toute l'extraction: le
+        // permis borne le nombre de bases clientes sollicitees simultanement.
+        sourceConnectionLimiter.withPermit("transport JDBC", () -> {
+            streamJdbcRowsWithConnection(protocol, config, consumer);
+            return null;
+        });
+    }
+
+    private void streamJdbcRowsWithConnection(
             String protocol, Map<String, Object> config, JdbcRowConsumer consumer) throws Exception {
         String query = validatedJdbcQuery(config);
         JdbcConnectionInfo jdbc = jdbcInfo(protocol, config);
@@ -1142,6 +1175,7 @@ public class SourceDataTransportService {
             throw new IllegalStateException(e);
         }
 
+        SendWindow window = new SendWindow(kafkaMaxInFlightBatches);
         try (BufferedInputStream input = new BufferedInputStream(Files.newInputStream(prepared.path()))) {
             byte[] buffer = new byte[size];
             int chunkIndex = 0;
@@ -1160,7 +1194,7 @@ public class SourceDataTransportService {
                 event.put("format", prepared.format());
                 event.put("fileName", prepared.fileName());
                 event.put("payloadBase64", Base64.getEncoder().encodeToString(payload));
-                kafka.send(topic, key, objectMapper.writeValueAsString(event)).get(60, TimeUnit.SECONDS);
+                window.send(kafka, topic, key, objectMapper.writeValueAsString(event));
                 chunkIndex++;
             }
             if (totalBytes == 0) {
@@ -1175,8 +1209,10 @@ public class SourceDataTransportService {
                 event.put("format", prepared.format());
                 event.put("fileName", prepared.fileName());
                 event.put("payloadBase64", "");
-                kafka.send(topic, key, objectMapper.writeValueAsString(event)).get(60, TimeUnit.SECONDS);
+                window.send(kafka, topic, key, objectMapper.writeValueAsString(event));
             }
+            // Le manifeste ne doit decrire que des morceaux reellement acquittes.
+            window.awaitAll();
         } catch (Exception e) {
             throw new BadRequestException("Publication des donnees Kafka impossible: " + e.getMessage());
         }
@@ -1370,4 +1406,46 @@ public class SourceDataTransportService {
     private record PreparedData(Path path, String format, String fileName, boolean deleteAfterPublish) { }
 
     private static final class KafkaRowTooLargeException extends RuntimeException { }
+
+    /**
+     * Fenêtre d'envois Kafka en vol.
+     *
+     * Auparavant chaque lot était suivi d'un {@code get()} bloquant : un million
+     * de lignes produisait deux mille allers-retours réseau strictement
+     * sérialisés, sur le thread de transport. Ici les envois sont empilés et
+     * seuls les plus anciens sont attendus quand la fenêtre est pleine, ce qui
+     * laisse le producteur grouper et compresser les lots.
+     *
+     * L'ordre reste garanti : tous les lots d'un transfert partagent la clé
+     * d'exécution donc la même partition, et le producteur est idempotent — un
+     * renvoi après erreur réseau ne peut ni dupliquer ni réordonner.
+     *
+     * La fenêtre borne aussi la latence de détection d'erreur : un échec est
+     * remonté après quelques dizaines de lots, pas à la fin du transfert.
+     */
+    private static final class SendWindow {
+        private final int maxInFlight;
+        private final java.util.ArrayDeque<java.util.concurrent.Future<?>> inFlight;
+
+        SendWindow(int maxInFlight) {
+            this.maxInFlight = Math.max(1, maxInFlight);
+            this.inFlight = new java.util.ArrayDeque<>(this.maxInFlight);
+        }
+
+        void send(KafkaTemplate<String, String> kafka, String topic, String key, String payload)
+                throws Exception {
+            inFlight.addLast(kafka.send(topic, key, payload));
+            while (inFlight.size() > maxInFlight) {
+                inFlight.pollFirst().get(60, TimeUnit.SECONDS);
+            }
+        }
+
+        /** Draine la fenêtre. Toute erreur d'un envoi est remontée ici. */
+        void awaitAll() throws Exception {
+            java.util.concurrent.Future<?> pending;
+            while ((pending = inFlight.pollFirst()) != null) {
+                pending.get(60, TimeUnit.SECONDS);
+            }
+        }
+    }
 }

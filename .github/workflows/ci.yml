@@ -24,6 +24,7 @@ jobs:
         module:
           - backend/api-core
           - backend/pipeline-consumer
+          - backend/source-gateway
           - backend/openhim-mediators
     defaults:
       run:
@@ -152,7 +153,8 @@ jobs:
       matrix:
         include:
           - {name: api-core, context: backend/api-core, file: backend/api-core/Dockerfile}
-          - {name: pipeline-consumer, context: backend/pipeline-consumer, file: backend/pipeline-consumer/Dockerfile}
+          - {name: pipeline-consumer, context: ".", file: backend/pipeline-consumer/Dockerfile}
+          - {name: source-gateway, context: backend/source-gateway, file: backend/source-gateway/Dockerfile}
           - {name: mediator, context: backend/iol-mediator, file: backend/iol-mediator/Dockerfile}
           - {name: web, context: frontend, file: frontend/Dockerfile}
           - {name: keycloak, context: backend/keycloak, file: backend/keycloak/Dockerfile}

@@ -149,6 +149,81 @@ def validate_main(config: dict, errors: list[str]) -> None:
     web_volumes = json.dumps(services["nginx"].get("volumes", []))
     require(errors, "frontend/dist" not in web_volumes, "Le frontend de production doit venir d une image immuable")
 
+    # Les moteurs Python realisent la transformation des donnees. Montes depuis
+    # l'hote, ils echappent a la signature cosign, aux SBOM et au scan Trivy, et
+    # un retour arriere de version ne les ramene pas. Ils doivent venir de
+    # l'image, au meme titre que le frontend.
+    consumer_volumes = json.dumps(services["pipeline-consumer"].get("volumes", []))
+    for engine in ("moteur_universel.py", "spark_etl.py", "mapping_engine.py"):
+        require(errors, engine not in consumer_volumes,
+                f"{engine} doit venir de l image immuable, pas d un montage hote")
+
+
+def validate_source_gateway(config: dict, errors: list[str]) -> None:
+    """Confinement du service de lecture des sources.
+
+    Le gateway n'est pas encore cable dans la topologie de production. Ces
+    invariants s'appliquent donc des qu'il apparait, et pas avant: la porte
+    reste verte pendant la migration, puis verrouille le confinement des que le
+    service est deploye. Un cliquet, pas un blocage premature.
+    """
+    services = config.get("services", {})
+    gateway = services.get("source-gateway")
+    if not gateway:
+        return
+
+    # Aucune interface publique: c'est la raison d'etre du service.
+    require(errors, not gateway.get("ports"),
+            "source-gateway ne doit publier aucun port")
+    require(errors, "tls=true" in env(gateway, "MONGODB_URI"),
+            "source-gateway doit imposer TLS vers MongoDB")
+    require(errors, env(gateway, "SPRING_KAFKA_PROPERTIES_SECURITY_PROTOCOL") == "SSL",
+            "source-gateway doit utiliser Kafka mTLS")
+    require(errors, env(gateway, "OBJECT_STORAGE_ENDPOINT").startswith("https://"),
+            "source-gateway doit utiliser RustFS en HTTPS")
+    require(errors, "iol-vault" in gateway.get("networks", {}),
+            "source-gateway doit joindre Vault par le reseau dedie")
+    for key in ("OBJECT_STORAGE_ACCESS_KEY", "OBJECT_STORAGE_SECRET_KEY", "MONGODB_PASSWORD"):
+        require(errors, env(gateway, key) == "",
+                f"{key} ne doit pas etre injecte en clair dans source-gateway")
+
+    # Le volume d'uploads doit rester en lecture seule: api-core depose et
+    # scanne, le gateway ne fait que lire un fichier deja declare sain.
+    for volume in gateway.get("volumes", []):
+        target = volume.get("target") if isinstance(volume, dict) else str(volume)
+        read_only = volume.get("read_only") if isinstance(volume, dict) else ":ro" in str(volume)
+        if target and "uploads" in str(target):
+            require(errors, bool(read_only),
+                    "source-gateway doit monter les uploads en lecture seule")
+
+    # Les deux services ne doivent jamais partager la meme identite Vault.
+    api = services.get("api-core", {})
+    gateway_role = env(gateway, "VAULT_ROLE_ID_FILE")
+    api_role = env(api, "VAULT_ROLE_ID_FILE")
+    if gateway_role and api_role:
+        require(errors, gateway_role != api_role,
+                "source-gateway et api-core doivent utiliser des identites Vault distinctes")
+
+
+def validate_source_gateway_policy(errors: list[str]) -> None:
+    """La politique Vault du gateway ne doit permettre que le dechiffrement.
+
+    Pouvoir chiffrer reviendrait a pouvoir enregistrer ou reecrire un secret de
+    connexion, ce qui reste une operation d'api-core declenchee par un
+    utilisateur authentifie.
+    """
+    policy_path = BACKEND / "vault/policies/iol-source-gateway.hcl"
+    if not policy_path.exists():
+        errors.append("Politique Vault du source-gateway absente")
+        return
+    policy = policy_path.read_text(encoding="utf-8")
+    require(errors, "transit/decrypt/iol-business-credentials" in policy,
+            "Le source-gateway doit pouvoir dechiffrer les credentials source")
+    require(errors, "transit/encrypt/" not in policy,
+            "Le source-gateway ne doit PAS pouvoir chiffrer de nouveaux credentials")
+    require(errors, "transit/rewrap/" not in policy,
+            "Le source-gateway ne doit PAS pouvoir reencapsuler un credential")
+
 
 def validate_openhim(config: dict, errors: list[str]) -> None:
     services = config.get("services", {})
@@ -226,6 +301,8 @@ def main() -> int:
         return 1
 
     validate_main(main_config, errors)
+    validate_source_gateway(main_config, errors)
+    validate_source_gateway_policy(errors)
     validate_openhim(openhim_config, errors)
     validate_files(errors)
 

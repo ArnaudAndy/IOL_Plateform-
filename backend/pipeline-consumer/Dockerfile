@@ -1,9 +1,14 @@
 # syntax=docker/dockerfile:1.7
 
+# Le contexte de build est la RACINE du depot, et non ce dossier: les moteurs
+# Python vivent a la racine et doivent etre copies dans l'image. Les monter
+# depuis l'hote laissait le code qui transforme reellement les donnees hors de
+# la chaine signee — non signe, non scanne, absent des SBOM, et insensible a un
+# retour arriere de version.
 FROM maven:3.9.9-eclipse-temurin-17 AS build
 WORKDIR /workspace
-COPY pom.xml .
-COPY src ./src
+COPY backend/pipeline-consumer/pom.xml .
+COPY backend/pipeline-consumer/src ./src
 RUN mvn -q -DskipTests package \
     && mvn -q dependency:copy-dependencies \
       -DincludeScope=runtime \
@@ -18,8 +23,9 @@ USER root
 WORKDIR /app
 COPY --from=build /workspace/target/pipeline-consumer-*.jar /app/pipeline-consumer.jar
 COPY --from=build /workspace/jdbc /opt/iol/jdbc
-COPY requirements.txt /app/requirements.txt
-COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+COPY backend/pipeline-consumer/requirements.txt /app/requirements.txt
+COPY backend/pipeline-consumer/docker-entrypoint.sh /app/docker-entrypoint.sh
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3-pip curl \
     && rm -rf /var/lib/apt/lists/*
@@ -28,6 +34,18 @@ RUN pip3 install --no-cache-dir --prefer-binary --timeout 120 --retries 8 \
 RUN chmod +x /app/docker-entrypoint.sh
 COPY --from=hop-runtime /opt/hop /opt/hop
 COPY --from=hop-java /opt/java/openjdk /opt/iol/java21
+
+# Moteurs d'execution, embarques dans l'image et non plus montes depuis l'hote.
+# Ils sont ainsi couverts par la signature cosign, les SBOM et le scan Trivy, et
+# un retour arriere de version les ramene avec le reste.
+#
+# moteur_universel.py importe mapping_engine: les deux doivent rester dans le
+# meme dossier, que Python ajoute au chemin d'import en executant le script.
+#
+# Place en fin de Dockerfile a dessein: une correction de moteur ne doit pas
+# invalider les couches d'installation apt et pip, qui coutent plusieurs minutes.
+COPY moteur_universel.py mapping_engine.py spark_etl.py /opt/iol/engine/
+RUN chmod 0444 /opt/iol/engine/*.py
 
 # Variables par défaut — surchargées par docker-compose.yml
 ENV KAFKA_BOOTSTRAP_SERVERS=kafka:9092

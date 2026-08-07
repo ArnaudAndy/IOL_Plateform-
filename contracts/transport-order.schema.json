@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://iol.example.org/contracts/transport-order.schema.json",
+  "title": "Ordre de transport IOL",
+  "description": "Ordre emis par api-core et consomme par le source-gateway. Il declenche la lecture de la source, le transport des donnees et la publication de la commande d'execution. Cet ordre ne transporte AUCUN secret, AUCUNE configuration et AUCUNE donnee: le gateway resout tout depuis workflowId. C'est ce qui rend le message inoffensif dans un topic, une file d'erreurs ou un journal.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "eventType",
+    "schemaVersion",
+    "organizationId",
+    "workflowId",
+    "execLogId",
+    "executionKey",
+    "requestedAt"
+  ],
+  "properties": {
+    "eventType": {
+      "const": "TRANSPORT_REQUESTED",
+      "description": "Discriminant de l'enveloppe."
+    },
+    "schemaVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Version du contrat. Le gateway refuse une version qu'il ne connait pas plutot que d'interpreter au hasard."
+    },
+    "organizationId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$",
+      "description": "Organisation unique de la plateforme. Prefixe la cle Kafka et les chemins RustFS."
+    },
+    "workflowId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Seule reference metier transportee. Le gateway lit la configuration et resout les credentials a partir d'elle."
+    },
+    "execLogId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Journal d'execution deja cree par api-core. Sert de cle de claim idempotent: une redelivrance Kafka ne doit pas relancer l'extraction."
+    },
+    "executionKey": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,63}:.+$",
+      "description": "Cle de partition {organizationId}:{workflowId}. Transportee pour que la commande finale atterrisse sur la meme partition que les lots de donnees, ce qui preserve l'ordre."
+    },
+    "requestedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Horodatage de la soumission, en UTC."
+    },
+    "requestedBy": {
+      "type": "string",
+      "description": "Identite ayant declenche l'execution, ou le proprietaire du workflow pour un declenchement planifie. Sert a l'audit et au controle de propriete cote gateway."
+    },
+    "priority": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5,
+      "description": "Priorite du workflow, recopiee pour choisir le topic de commande en sortie."
+    }
+  },
+  "examples": [
+    {
+      "eventType": "TRANSPORT_REQUESTED",
+      "schemaVersion": 1,
+      "organizationId": "iol-default",
+      "workflowId": "wf-123",
+      "execLogId": "exec-456",
+      "executionKey": "iol-default:wf-123",
+      "requestedAt": "2026-08-07T10:15:00Z",
+      "requestedBy": "clinicien@hopital-a.example.org",
+      "priority": 3
+    }
+  ]
+}

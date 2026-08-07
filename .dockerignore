@@ -1,0 +1,43 @@
+# Le contexte de build du pipeline-consumer est la racine du depot, afin que
+# les moteurs Python soient copies DANS l'image plutot que montes depuis l'hote.
+# Sans ce fichier, le contexte enverrait plusieurs Go au demon Docker.
+
+# Dependances et sorties de construction
+**/node_modules/
+**/target/
+**/dist/
+**/__pycache__/
+**/*.pyc
+tsconfig.tsbuildinfo
+
+# Historique et outils locaux
+.git/
+.github/
+.agents/
+.claude/
+.codex/
+.tmp/
+
+# Secrets et etats locaux — ne doivent jamais entrer dans une image
+**/.env
+**/.env.local
+**/.env.*.local
+backend/secrets/
+backend/backups/
+backend/keycloak/generated/
+
+# Journaux, archives et artefacts
+**/*.log
+**/*.pid
+**/*.zip
+**/*.bkp
+reports/
+
+# Frontend: son image a son propre contexte
+frontend/
+new_frontend/
+
+# Documentation et diagrammes
+docs/
+*.drawio
+*.pdf

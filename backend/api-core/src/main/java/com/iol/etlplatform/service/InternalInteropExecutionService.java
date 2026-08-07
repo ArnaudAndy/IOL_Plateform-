@@ -42,9 +42,6 @@ public class InternalInteropExecutionService {
     private final KafkaPipelineEventService kafkaPipelineEventService;
     private final InboundIdempotencyService inboundIdempotencyService;
 
-    @Value("${app.tenancy.mode:SINGLE_ORGANIZATION}")
-    private String tenancyMode = "SINGLE_ORGANIZATION";
-
     @Value("${app.tenancy.default-organization-id:iol-default}")
     private String defaultOrganizationId = "iol-default";
 
@@ -244,13 +241,12 @@ public class InternalInteropExecutionService {
                 .toList();
     }
 
+    /**
+     * Organisation unique de la plateforme. Elle partitionne les clés Kafka, les
+     * chemins RustFS et les claims d'idempotence. La valeur est fixe : il n'existe
+     * pas de mode multi-organisation, faute d'isolation runtime.
+     */
     private String activeOrganizationId() {
-        if (!"SINGLE_ORGANIZATION".equalsIgnoreCase(tenancyMode)) {
-            throw new ResponseStatusException(
-                    HttpStatus.SERVICE_UNAVAILABLE,
-                    "Les échanges interop multi-organisation restent désactivés tant que "
-                            + "l'isolation runtime complète n'est pas activée.");
-        }
         if (defaultOrganizationId == null
                 || !defaultOrganizationId.matches("[A-Za-z0-9][A-Za-z0-9._-]{2,63}")) {
             throw new IllegalStateException("app.tenancy.default-organization-id est invalide.");
