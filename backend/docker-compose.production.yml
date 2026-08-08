@@ -627,7 +627,7 @@ services:
     security_opt: ["no-new-privileges:true"]
 
   rustfs-2:
-    image: rustfs/rustfs:${RUSTFS_VERSION:-1.0.0-beta.9}
+    image: rustfs/rustfs:${RUSTFS_VERSION:-1.0.0-beta.12}
     restart: unless-stopped
     entrypoint: ["/bin/sh", "/opt/iol/secure-entrypoint.sh"]
     command: ["https://rustfs:9000/data", "https://rustfs-2:9000/data", "https://rustfs-3:9000/data", "https://rustfs-4:9000/data"]
@@ -649,7 +649,7 @@ services:
     security_opt: ["no-new-privileges:true"]
 
   rustfs-3:
-    image: rustfs/rustfs:${RUSTFS_VERSION:-1.0.0-beta.9}
+    image: rustfs/rustfs:${RUSTFS_VERSION:-1.0.0-beta.12}
     restart: unless-stopped
     entrypoint: ["/bin/sh", "/opt/iol/secure-entrypoint.sh"]
     command: ["https://rustfs:9000/data", "https://rustfs-2:9000/data", "https://rustfs-3:9000/data", "https://rustfs-4:9000/data"]
@@ -671,7 +671,7 @@ services:
     security_opt: ["no-new-privileges:true"]
 
   rustfs-4:
-    image: rustfs/rustfs:${RUSTFS_VERSION:-1.0.0-beta.9}
+    image: rustfs/rustfs:${RUSTFS_VERSION:-1.0.0-beta.12}
     restart: unless-stopped
     entrypoint: ["/bin/sh", "/opt/iol/secure-entrypoint.sh"]
     command: ["https://rustfs:9000/data", "https://rustfs-2:9000/data", "https://rustfs-3:9000/data", "https://rustfs-4:9000/data"]
@@ -691,6 +691,27 @@ services:
       start_period: 30s
     networks: [iol-internal, iol-egress, iol-vault]
     security_opt: ["no-new-privileges:true"]
+
+  # Client S3 de qualification. Sous profil dedie: il ne demarre JAMAIS en
+  # exploitation normale, uniquement quand on execute
+  # `backend/ops/tests/rustfs-qualification.sh`. Il n'existe que pour prouver,
+  # sur l'infrastructure cible, ce que la version pre-GA du magasin d'objets ne
+  # garantit pas encore contractuellement.
+  aws-cli:
+    profiles: [qualification]
+    image: amazon/aws-cli:2.31.11
+    entrypoint: [""]
+    command: ["sleep", "0"]
+    environment:
+      AWS_ACCESS_KEY_ID: "${QUALIFICATION_ACCESS_KEY:-}"
+      AWS_SECRET_ACCESS_KEY: "${QUALIFICATION_SECRET_KEY:-}"
+      AWS_DEFAULT_REGION: "${OBJECT_STORAGE_REGION:-us-east-1}"
+      AWS_ENDPOINT_URL: "https://rustfs-lb:9000"
+      # Le magasin est en TLS interne: sans la CA, chaque appel echouerait.
+      AWS_CA_BUNDLE: "/run/tls/ca.pem"
+    volumes:
+      - ./secrets/runtime-tls/rustfs-lb:/run/tls:ro
+    networks: [iol-internal]
 
   rustfs-lb:
     image: nginx:1.29-alpine

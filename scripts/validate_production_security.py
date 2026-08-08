@@ -146,6 +146,29 @@ def validate_main(config: dict, errors: list[str]) -> None:
     for name, service in services.items():
         image = str(service.get("image", ""))
         require(errors, not image.endswith(":latest"), f"Image mutable latest interdite: {name}")
+
+    # Le magasin d'objets porte des donnees metier en transit. Il est deploye en
+    # version pre-GA par choix assume: la contrepartie est que la version doit
+    # etre FIGEE et QUALIFIEE, jamais flottante. Un pre-GA qui bouge d'un
+    # deploiement a l'autre change de comportement sans revue.
+    object_store_images = {
+        str(services[name].get("image", ""))
+        for name in ("rustfs", "rustfs-2", "rustfs-3", "rustfs-4")
+        if name in services
+    }
+    require(errors, len(object_store_images) <= 1,
+            f"Les noeuds du magasin d objets doivent partager la meme version: {sorted(object_store_images)}")
+    for image in object_store_images:
+        require(errors, ":" in image and not image.endswith(":latest"),
+                f"Magasin d objets sans version figee: {image}")
+        # Une version pre-GA impose la preuve de qualification: mode distribue,
+        # integrite apres perte d un noeud et chiffrement au repos.
+        if any(token in image.lower() for token in ("alpha", "beta", "-rc", "preview", "snapshot")):
+            proof = BACKEND / "ops/tests/rustfs-qualification.sh"
+            require(errors, proof.exists(),
+                    f"Magasin d objets en version pre-GA ({image}): le script de "
+                    f"qualification {proof.name} est obligatoire et doit etre execute "
+                    f"sur l infrastructure cible avant la mise en production.")
     web_volumes = json.dumps(services["nginx"].get("volumes", []))
     require(errors, "frontend/dist" not in web_volumes, "Le frontend de production doit venir d une image immuable")
 

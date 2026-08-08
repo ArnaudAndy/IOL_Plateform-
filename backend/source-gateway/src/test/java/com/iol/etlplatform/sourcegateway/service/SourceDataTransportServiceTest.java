@@ -219,6 +219,9 @@ class SourceDataTransportServiceTest {
                 new ObjectMapper(), provider, uploads, mock(ApiSourceClient.class), objectStorage,
                 new SourceConnectionLimiter(8, 5));
         ReflectionTestUtils.setField(service, "enabled", true);
+        // Le libelle du magasin est configurable: le transport n'utilise que
+        // l'API S3 standard, toute implementation compatible convient.
+        ReflectionTestUtils.setField(service, "objectStorageProvider", "RUSTFS");
 
         Map<String, Object> config = new LinkedHashMap<>();
         config.put("upload_id", uploaded.uploadId());

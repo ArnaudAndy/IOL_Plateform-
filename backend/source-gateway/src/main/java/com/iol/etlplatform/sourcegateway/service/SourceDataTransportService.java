@@ -86,6 +86,15 @@ public class SourceDataTransportService {
     @Value("${app.kafka.data-transport.max-in-flight-batches:64}")
     private int kafkaMaxInFlightBatches;
 
+    /**
+     * Nom du magasin d'objets, pour les manifestes et les journaux.
+     *
+     * Le transport n'utilise que l'API S3 standard: toute implementation
+     * compatible convient. Ce libelle sert a la tracabilite, pas au routage.
+     */
+    @Value("${app.object-storage.provider:S3}")
+    private String objectStorageProvider;
+
     @Value("${app.interop.big-data.row-threshold:${SPARK_ROW_THRESHOLD:10000000}}")
     private long inboundBigDataRowThreshold;
 
@@ -859,7 +868,11 @@ public class SourceDataTransportService {
             String fileName) {
         Map<String, Object> manifest = new LinkedHashMap<>();
         manifest.put("transport", "OBJECT_STORAGE");
-        manifest.put("provider", "RUSTFS");
+        // Etiquette informative du magasin d'objets. Le code n'utilise que l'API
+        // S3 standard et aucun consommateur ne branche sur cette valeur: le
+        // magasin est interchangeable. Annoncer "RUSTFS" en dur donnerait un
+        // manifeste faux des qu'une autre implementation S3 est deployee.
+        manifest.put("provider", objectStorageProvider);
         manifest.put("bucket", stored.bucket());
         manifest.put("objectKey", stored.objectKey());
         manifest.put("sourceIndex", sourceIndex);

@@ -69,6 +69,25 @@ app:
   tenancy:
     default-organization-id: ${APP_TENANCY_DEFAULT_ORGANIZATION_ID:iol-default}
 
+  # Dechiffrement des identifiants source. Doit rester aligne sur api-core: les
+  # deux services lisent les MEMES enveloppes, et le contexte de dechiffrement
+  # (environnement, proprietaire, connexion, usage) est une donnee authentifiee.
+  # Un environnement different d'un cote rend les secrets illisibles de l'autre.
+  credentials:
+    provider: ${CREDENTIAL_PROVIDER:LOCAL_AES_GCM}
+    environment: ${CREDENTIAL_ENVIRONMENT:development}
+    aes-key: ${CREDENTIAL_AES_KEY:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}
+    allow-legacy-plaintext: ${CREDENTIAL_ALLOW_LEGACY_PLAINTEXT:false}
+    vault:
+      address: ${VAULT_ADDR:}
+      namespace: ${VAULT_NAMESPACE:}
+      transit-mount: ${VAULT_TRANSIT_MOUNT:transit}
+      key-name: ${VAULT_TRANSIT_KEY:iol-business-credentials}
+      token-file: ${VAULT_TOKEN_FILE:}
+      # AppRole PROPRE au gateway: sa politique n'accorde que transit/decrypt.
+      role-id-file: ${VAULT_ROLE_ID_FILE:}
+      secret-id-file: ${VAULT_SECRET_ID_FILE:}
+
   kafka:
     topics:
       transport-requests: ${APP_KAFKA_TRANSPORT_TOPIC:iol.transport.requests}

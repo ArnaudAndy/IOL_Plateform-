@@ -23,9 +23,25 @@ etre obtenues dans l'environnement cible.
 | Livraison | images immuables, scan, SBOM, provenance, signature ; moteurs Python embarques dans l'image | protections GitHub et environnement d'approbation actifs |
 | Multi-organisation | contrats seulement | **NO-GO** ; garder `SINGLE_ORGANIZATION` |
 
-RustFS est actuellement epingle sur une version beta dont le mode distribue et
-le KMS doivent etre qualifies dans votre infrastructure. C'est un bloqueur de
-production, pas une simple remarque documentaire.
+RustFS est epingle sur une version pre-GA (`1.0.0-beta.12`). Ce choix est assume,
+mais il impose une contrepartie: prouver sur VOTRE infrastructure ce que
+l'editeur ne garantit pas encore contractuellement.
+
+```bash
+export CONFIRM_QUALIFICATION=IOL-RUSTFS-QUALIFICATION
+export IOL_PRODUCTION_ENV_FILE="$PWD/backend/.env.production"
+bash backend/ops/tests/rustfs-qualification.sh
+```
+
+Le script verifie ce que `ha-failover.sh` ne couvre pas: un magasin peut
+repondre « sain » tout en ayant perdu des donnees. Il eprouve donc le multipart
+a la taille de production, l'INTEGRITE SHA-256 apres perte d'un noeud, la
+reconstruction au retour du noeud, et le chiffrement au repos par depot d'un
+canari recherche en clair sur le volume.
+
+La porte de securite refuse le demarrage tant que ce script est absent du depot,
+et exige que les quatre noeuds partagent une version figee. Conservez la sortie
+du script: elle constitue la preuve de qualification.
 
 ## 2. Topologie cible
 

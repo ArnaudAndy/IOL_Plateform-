@@ -238,6 +238,10 @@ app:
       temp-dir: ${APP_KAFKA_DATA_TEMP_DIR:${java.io.tmpdir}/iol-api-transport}
       row-batch-rows: ${APP_KAFKA_ROW_BATCH_ROWS:500}
       max-row-batch-event-bytes: ${APP_KAFKA_ROW_BATCH_MAX_EVENT_BYTES:8388608}
+      # Lots laisses en vol avant d'attendre le plus ancien. Remplace l'ancien
+      # comportement d'un accuse de reception bloquant par lot, qui serialisait
+      # tout le transfert sur un seul thread.
+      max-in-flight-batches: ${APP_KAFKA_MAX_IN_FLIGHT_BATCHES:64}
       max-local-extraction-bytes: ${APP_LOCAL_EXTRACTION_MAX_BYTES:1073741824}
       min-free-disk-bytes: ${APP_LOCAL_EXTRACTION_MIN_FREE_BYTES:536870912}
       stale-temp-file-age-seconds: ${APP_LOCAL_TEMP_MAX_AGE_SECONDS:86400}

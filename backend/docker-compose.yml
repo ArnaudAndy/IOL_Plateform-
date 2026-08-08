@@ -427,7 +427,7 @@ services:
 
   # ── RustFS (stockage objet S3-compatible, auto-hébergé) ───────────────────
   rustfs:
-    image: rustfs/rustfs:${RUSTFS_VERSION:-1.0.0-beta.9}
+    image: rustfs/rustfs:${RUSTFS_VERSION:-1.0.0-beta.12}
     container_name: iol-rustfs
     restart: unless-stopped
     command: ["--console-enable", "/data"]
