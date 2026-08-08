@@ -1,7 +1,3 @@
-# Outils locaux d'agents IA — configuration propre a la machine
-.agents/
-.claude/
-.codex/
 
 # Espace de travail temporaire
 .tmp/
