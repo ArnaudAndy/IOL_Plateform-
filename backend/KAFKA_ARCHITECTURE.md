@@ -1,223 +1,41 @@
-# Architecture Kafka de la Plateforme ETL
+# Kafka dans ce projet
 
-## Vue d'ensemble
+Ce document décrit l’usage pratique de Kafka dans la stack backend actuelle.
 
-La plateforme utilise Apache Kafka comme système de messagerie asynchrone pour orchestrer l'exécution des pipelines ETL entre le backend principal et le service consommateur de pipelines.
+## Rôle de Kafka
 
-## Architecture Globale
+Kafka sert de bus de messages entre les services du backend et le consumer de pipeline. Il transporte les commandes d’exécution, les états de progression et les événements liés au traitement.
 
-```
-┌─────────────────┐      ┌──────────────────┐      ┌─────────────────────┐
-│   Backend       │      │     Kafka        │      │  Pipeline Consumer  │
-│   Principal     │─────▶│   Broker         │─────▶│  (Kafka Listener)   │
-│   (Port 8084)   │      │  (Port 9092)     │      │   (Port 8085)       │
-└─────────────────┘      └──────────────────┘      └─────────────────────┘
-         │                                                 │
-         │                                                 │
-         ▼                                                 ▼
-┌─────────────────┐                              ┌─────────────────────┐
-│   MongoDB       │                              │   Apache Hop        │
-│ (Metadata)      │                              │  (ETL Execution)    │
-└─────────────────┘                              └─────────────────────┘
-```
+## Où Kafka est utilisé
 
-## Flux de Données Détaillé
+Dans ce dépôt, Kafka est intégré à :
+- api-core : publication des commandes et événements de pipeline ;
+- pipeline-consumer : consommation des commandes et suivi de l’exécution ;
+- la stack Docker Compose : broker Kafka et dépendances associées.
 
-### Contrat actuel des commandes pipeline
+## Flux principal
 
-Les commandes consommées par `pipeline-consumer` doivent porter :
+1. api-core prépare une exécution.
+2. Un message est publié vers un topic Kafka.
+3. pipeline-consumer consomme ce message.
+4. Le consumer déclenche l’exécution technique via Hop ou Spark selon le contexte.
 
-```json
-{
-  "eventType": "PIPELINE_EXECUTION_REQUESTED",
-  "workflowId": "wf_123",
-  "execLogId": "log_456",
-  "workflowName": "Workflow",
-  "executionMode": "LOCAL",
-  "priority": 3,
-  "direction": "INTERNAL",
-  "standardId": null,
-  "sources": [
-    {
-      "source_name": "CSV",
-      "config": {
-        "target_table": "stg_table",
-        "target_connection": {},
-        "source_config": {},
-        "silver_config": {}
-      }
-    }
-  ],
-  "gold_config_global": {}
-}
-```
+## Points techniques utiles
 
-Pour l'interop INBOUND, le médiateur OpenHIM publie le même contrat avec
-`direction=INBOUND`, `standardId`, et une source `PUSH` dont les données sont
-déjà normalisées au pivot IOL :
+- Les topics sont définis dans la configuration Docker Compose et dans les variables d’environnement du backend.
+- Les messages transportent des métadonnées et des commandes, pas les secrets de connexion en clair.
+- Kafka est utilisé comme couche de coordination asynchrone, pas comme stockage de référence unique.
 
-```json
-{
-  "eventType": "PIPELINE_EXECUTION_REQUESTED",
-  "direction": "INBOUND",
-  "standardId": "std_custom",
-  "correlationId": "corr-123",
-  "openhimTransactionId": "openhim-tx-123",
-  "sources": [
-    {
-      "source_name": "PUSH",
-      "type": "PUSH",
-      "config": {
-        "source_config": {
-          "mode": "PUSH",
-          "already_pivot": true,
-          "data": { "patient_id": "P001" },
-          "records": [{ "patient_id": "P001" }]
-        }
-      }
-    }
-  ]
-}
-```
+## Bonnes pratiques
 
-Le consumer accepte cette source `PUSH` uniquement sur `direction=INBOUND` et la
-matérialise en CSV temporaire pour réutiliser le pipeline Hop existant.
+- garder les messages simples et structurés ;
+- éviter d’y mettre des secrets sensibles ;
+- surveiller les topics, les offsets et les erreurs de consommation ;
+- traiter les messages idempotemment quand c’est possible.
 
-Les messages `iol.pipeline.status` publiés par `pipeline-consumer` recopient
-`direction`, `standardId`, `sourceSystem`, `correlationId` et
-`openhimTransactionId`. api-core les fusionne dans `ExecutionLog.executionParams`,
-ce qui permet de consulter les transactions interop via :
+## À retenir
 
-- `GET /api/logs/interop`
-- `GET /api/logs/interop/correlation/{correlationId}`
-- `GET /api/logs/interop/summary`
-
-### 1. Configuration du Pipeline (Backend Principal)
-
-**Fichier:** `backend/src/main/java/com/iol/etlplatform/service/WorkflowService.java`
-
-```java
-// 1. L'utilisateur configure le pipeline via l'interface web
-// 2. Les métadonnées sont construites dans WorkflowWizardPage.jsx
-// 3. Le payload est envoyé au backend
-
-@PostMapping("/api/workflows")
-public WorkflowConfigDto createWorkflow(@RequestBody WorkflowPayload payload) {
-    // Construction des métadonnées JSON
-    String metadataJson = buildMetadataJson(payload);
-    
-    // Sauvegarde dans MongoDB
-    WorkflowConfig workflow = saveToDatabase(payload, metadataJson);
-    
-    // Publication vers Kafka
-    if (kafkaEnabled) {
-        kafkaTemplate.send("iol.pipeline.events", metadataJson);
-    }
-    
-    return workflow;
-}
-```
-
-### 2. Structure des Métadonnées (Format Apache Hop)
-
-**Fichier:** `frontend/src/pages/WorkflowWizardPage.jsx` - `buildMetadataObject()`
-
-```json
-{
-  "pipeline": {
-    "name": "pipeline_ventes",
-    "description": "Pipeline ETL pour les ventes",
-    "version": "v1"
-  },
-  "standard": "Finance",
-  "schedule": {
-    "enabled": true,
-    "frequency": "DAILY",
-    "time": "05:00"
-  },
-  "sources": [
-    {
-      "source_name": "CSV_Ventes",
-      "type": "CSV",
-      "config": {
-        "file_path": "C:\\ventes.csv",
-        "target_connection": {
-          "host": "localhost",
-          "port": 5432,
-          "database": "lakehouse",
-          "username": "postgres",
-          "password": "password",
-          "target_table": "stg_ventes"
-        },
-        "source_config": {
-          "delimiter": ";",
-          "enclosure": "\"",
-          "encoding": "UTF-8"
-        },
-        "fields": [
-          {
-            "name": "id_client",
-            "type": "String",
-            "trim": "both"
-          }
-        ],
-        "silver_config": {
-          "target_table_silver": "cln_ventes",
-          "elt_scripts_silver": "SQL de nettoyage"
-        }
-      }
-    }
-  ],
-  "fields": [...],
-  "gold_config": {
-    "target_table_gold": "fact_ventes_mensuelles",
-    "elt_scripts_gold": "SQL d'agrégation"
-  },
-  "createdAt": "2026-06-05T09:25:44.194Z"
-}
-```
-
-### 3. Publication Kafka
-
-**Fichier:** `backend/src/main/java/com/iol/etlplatform/kafka/KafkaPipelineEventService.java`
-
-```java
-@Service
-public class KafkaPipelineEventService {
-    
-    private final KafkaTemplate<String, String> kafkaTemplate;
-    
-    @Value("${app.kafka.topics.pipeline-events:iol.pipeline.events}")
-    private String pipelineTopic;
-    
-    public void publishPipelineEvent(String metadataJson) {
-        // Publication asynchrone vers Kafka
-        kafkaTemplate.send(pipelineTopic, metadataJson)
-            .whenComplete((result, exception) -> {
-                if (exception == null) {
-                    log.info("Pipeline publié avec succès, offset: {}", 
-                        result.getRecordMetadata().offset());
-                } else {
-                    log.error("Erreur publication Kafka", exception);
-                }
-            });
-    }
-}
-```
-
-### 4. Consommation et Orchestration
-
-**Fichier:** `backend/pipeline-consumer/src/main/java/com/iol/etlplatform/pipelineconsumer/service/PipelineOrchestrator.java`
-
-```java
-@Service
-public class PipelineOrchestrator {
-    
-    @KafkaListener(topics = "${app.kafka.topics.pipeline-events:iol.pipeline.events}")
-    public void executeFromEvent(String metadataJson) {
-        try {
-            // 1. Parser les métadonnées JSON
-            JsonNode meta = objectMapper.readTree(metadataJson);
+Kafka est un composant de transport et d’orchestration, pas un substitut au stockage métier durable.
             String pipelineName = meta.path("pipeline").path("name").asText();
             
             // 2. Extraire la configuration source

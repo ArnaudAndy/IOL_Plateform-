@@ -1,223 +1,41 @@
-# Guide: Adaptation Apache Hop pour Support Multi-Sources
+# Apache Hop dans ce projet
 
-## Contexte Actuel
+Ce document explique comment Apache Hop est utilisé dans la plateforme actuelle.
 
-Votre pipeline Apache Hop actuel gère une seule source. Voici comment l'adapter pour gérer **plusieurs sources** simultanément, comme spécifié dans la nouvelle structure de métadonnées.
+## Rôle d’Apache Hop
 
-## Nouvelle Structure de Métadonnées
+Apache Hop sert de moteur d’exécution des transformations ETL. Il reçoit les artefacts préparés par le backend et exécute les traitements nécessaires vers la destination finale.
 
-```json
-{
-  "pipeline": { "name": "multi_source_pipeline", ... },
-  "sources": [
-    {
-      "source_name": "CSV_Ventes",
-      "type": "CSV",
-      "config": {
-        "file_path": "C:\\ventes.csv",
-        "target_connection": { ... },
-        "source_config": { ... },
-        "fields": [...],
-        "silver_config": { ... }
-      }
-    },
-    {
-      "source_name": "PostgreSQL_Commandes",
-      "type": "POSTGRES",
-      "config": {
-        "target_connection": { ... },
-        "fields": [...],
-        "silver_config": { ... }
-      }
-    }
-  ],
-  "gold_config": {
-    "target_table_gold": "fact_ventes_mensuelles",
-    "elt_scripts_gold": "SQL d'agrégation finale"
-  }
-}
-```
+## Où il intervient dans ce dépôt
 
-## Architecture du Pipeline Multi-Sources
+Hop est utilisé dans la partie d’exécution du pipeline, notamment via :
+- la stack backend et le consumer de pipeline ;
+- les projets et configurations présents dans le dossier hop-project ;
+- les scripts et fichiers de configuration liés à l’orchestration des jobs ETL.
 
-### 1. Pipeline Principal d'Orchestration
+## Flux pratique
 
-**Nom:** `main_orchestration.hpl`
+1. Le backend prépare une exécution et transmet les métadonnées nécessaires.
+2. Le consumer de pipeline lance l’exécution via Hop.
+3. Hop traite les données selon la logique du workflow.
+4. Les résultats sont écrits vers la destination ciblée.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     MAIN ORCHESTRATION                       │
-├─────────────────────────────────────────────────────────────┤
-│                                                               │
-│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐    │
-│  │   START      │──▶│  Parse JSON  │──▶│  Loop Sources│    │
-│  │  Pipeline    │   │  Metadata    │   │  (For Each)  │    │
-│  └──────────────┘   └──────────────┘   └──────────────┘    │
-│                                              │               │
-│                                              ▼               │
-│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐    │
-│  │   END        │◀──│  Gold        │◀──│ Source       │    │
-│  │  Pipeline    │   │  Aggregation │   │ Sub-Pipeline │    │
-│  └──────────────┘   └──────────────┘   └──────────────┘    │
-│                                                               │
-└─────────────────────────────────────────────────────────────┘
-```
+## Points utiles pour l’intégration
 
-### 2. Sub-Pipeline par Type de Source
+- Hop n’accède pas directement aux secrets source : il reçoit des artefacts et des paramètres déjà préparés.
+- Le moteur est utilisé comme couche d’exécution technique, tandis que l’API reste le point de contrôle métier.
+- Les projets Hop doivent rester cohérents avec les métadonnées et les chemins d’exécution définis par l’application.
 
-#### A. Sub-Pipeline pour Sources CSV
+## Bonnes pratiques
 
-**Nom:** `csv_source_processor.hpl`
+- garder les transformations explicites et testables ;
+- éviter de coupler directement les jobs à des données sensibles ;
+- versionner les projets Hop avec les configurations associées ;
+- valider les chemins d’entrée/sortie avant chaque déploiement.
 
-**Paramètres d'entrée:**
-- `${SOURCE_CONFIG}` - Configuration JSON de la source
-- `${METADATA_JSON}` - Métadonnées complètes
+## À retenir
 
-**Étapes:**
-
-1. **Lire le fichier CSV**
-```hop
-Transform: CSV File Input
-  - Filename: ${SOURCE_CONFIG.file_path}
-  - Delimiter: ${SOURCE_CONFIG.source_config.delimiter}
-  - Encoding: ${SOURCE_CONFIG.source_config.encoding}
-  - Fields: ${SOURCE_CONFIG.fields}
-```
-
-2. **Écrire dans la table de staging**
-```hop
-Transform: Table Output
-  - Connection: ${SOURCE_CONFIG.target_connection}
-  - Target table: ${SOURCE_CONFIG.target_connection.target_table}
-  - Commit size: 1000
-```
-
-3. **Exécuter le script Silver**
-```hop
-Transform: Execute SQL Script
-  - SQL: ${SOURCE_CONFIG.silver_config.elt_scripts_silver}
-  - Connection: ${SOURCE_CONFIG.target_connection}
-```
-
-#### B. Sub-Pipeline pour Sources Database (PostgreSQL, MySQL, etc.)
-
-**Nom:** `database_source_processor.hpl`
-
-**Étapes:**
-
-1. **Lire depuis la source**
-```hop
-Transform: Table Input
-  - Connection: ${SOURCE_CONFIG.target_connection}
-  - SQL: SELECT * FROM ${SOURCE_CONFIG.source_config.table}
-```
-
-2. **Écrire dans staging**
-```hop
-Transform: Table Output
-  - Connection: ${SOURCE_CONFIG.target_connection}
-  - Target table: ${SOURCE_CONFIG.target_connection.target_table}
-```
-
-3. **Transformation Silver**
-```hop
-Transform: Execute SQL Script
-  - SQL: ${SOURCE_CONFIG.silver_config.elt_scripts_silver}
-```
-
-### 3. Pipeline d'Agrégation Gold (Unique)
-
-**Nom:** `gold_aggregation.hpl`
-
-**Paramètres:**
-- `${GOLD_CONFIG}` - Configuration d'agrégation
-- `${SILVER_TABLES}` - Liste des tables silver à agréger
-
-**Étapes:**
-
-1. **Récupérer toutes les tables silver**
-```hop
-Transform: Get tables from metadata
-  - Query: SELECT table_name FROM information_schema.tables 
-           WHERE table_name LIKE 'cln_%'
-```
-
-2. **Exécuter l'agrégation finale**
-```hop
-Transform: Execute SQL Script
-  - SQL: ${GOLD_CONFIG.elt_scripts_gold}
-  - Connection: ${GOLD_CONFIG.target_connection}
-```
-
-## Implémentation Détaillée
-
-### Étape 1: Pipeline Principal (`main_orchestration.hpl`)
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<pipeline>
-  <info>
-    <name>main_orchestration</name>
-    <description>Orchestration multi-sources avec Apache Hop</description>
-  </info>
-  
-  <transform>
-    <name>Parse Metadata</name>
-    <type>JsonInput</type>
-    <config>
-      <filename>${METADATA_JSON_PATH}</filename>
-      <fields>
-        <field>
-          <name>sources</name>
-          <path>$.sources</path>
-          <type>Json</type>
-        </field>
-        <field>
-          <name>gold_config</name>
-          <path>$.gold_config</path>
-          <type>Json</type>
-        </field>
-      </fields>
-    </config>
-  </transform>
-  
-  <transform>
-    <name>Process Each Source</name>
-    <type>Executor</type>
-    <config>
-      <pipeline>source_processor.hpl</pipeline>
-      <parameters>
-        <parameter>
-          <name>SOURCE_CONFIG</name>
-          <value>${sources}</value>
-        </parameter>
-        <parameter>
-          <name>METADATA_JSON</name>
-          <value>${METADATA_JSON}</value>
-        </parameter>
-      </parameters>
-    </config>
-  </transform>
-  
-  <transform>
-    <name>Gold Aggregation</name>
-    <type>Executor</type>
-    <config>
-      <pipeline>gold_aggregation.hpl</pipeline>
-      <parameters>
-        <parameter>
-          <name>GOLD_CONFIG</name>
-          <value>${gold_config}</value>
-        </parameter>
-      </parameters>
-    </config>
-  </transform>
-</pipeline>
-```
-
-### Étape 2: Sub-Pipeline Source (`source_processor.hpl`)
-
-```xml
+Apache Hop est le moteur d’exécution ETL du système. Il doit être vu comme un composant technique secondaire au regard du contrôle métier, qui reste centralisé dans le backend.
 <?xml version="1.0" encoding="UTF-8"?>
 <pipeline>
   <parameters>

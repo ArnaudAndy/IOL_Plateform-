@@ -1,8 +1,25 @@
-Pipeline consumer microservice
+# Pipeline Consumer
 
-This Spring Boot application consumes prioritized orchestration commands from Kafka and launches Apache Hop with the generated metadata JSON.
+Ce microservice reçoit les commandes d’exécution issues du backend, contrôle leur intégrité et lance les traitements ETL via Apache Hop ou Spark selon le contexte.
 
-Run locally:
+## Rôle du service
+
+Le pipeline consumer est le point d’exécution technique du système. Il ne décide pas du métier, mais il garantit que :
+- une commande est reçue depuis Kafka ;
+- les métadonnées d’exécution sont préparées ;
+- les données nécessaires sont matérialisées dans un format exploitable ;
+- l’exécution est lancée correctement ;
+- les statuts de progression et d’erreur sont remontés.
+
+## Flux principal
+
+1. Le backend publie une commande d’exécution sur Kafka.
+2. Le consumer récupère la commande.
+3. Il construit le fichier de métadonnées utilisé par Hop.
+4. Il lance l’exécution technique.
+5. Il publie les statuts et, si besoin, les messages de DLQ.
+
+## Exécution locale
 
 ```bash
 cd backend/pipeline-consumer
@@ -10,59 +27,46 @@ mvn -DskipTests package
 java -jar target/pipeline-consumer-0.0.1-SNAPSHOT.jar
 ```
 
-Configuration:
-- `KAFKA_BOOTSTRAP_SERVERS` environment variable or default `localhost:9092`
-- `APP_KAFKA_COMMANDS_HIGH_TOPIC`, `APP_KAFKA_COMMANDS_TOPIC`, `APP_KAFKA_COMMANDS_LOW_TOPIC`
-- `APP_KAFKA_STATUS_TOPIC` for Hop execution results
-- `APP_KAFKA_DLQ_TOPIC` for unrecoverable execution failures
+## Configuration importante
 
-## INBOUND PUSH
+Variables à prévoir selon l’environnement :
+- `KAFKA_BOOTSTRAP_SERVERS` : adresse du broker Kafka ;
+- `APP_KAFKA_COMMANDS_HIGH_TOPIC`, `APP_KAFKA_COMMANDS_TOPIC`, `APP_KAFKA_COMMANDS_LOW_TOPIC` : topics de commandes ;
+- `APP_KAFKA_STATUS_TOPIC` : topic de statut ;
+- `APP_KAFKA_DLQ_TOPIC` : topic pour les erreurs non récupérables.
 
-For interop INBOUND commands, the listener expects the same command envelope as api-core uses, including `eventType=PIPELINE_EXECUTION_REQUESTED`. When `direction=INBOUND` and a source is marked `PUSH`, the consumer materializes the already-normalized pivot record(s) to a temporary UTF-8 CSV file, rewrites only that executable metadata source to CSV for Hop, and preserves the root `direction`, `standardId`, `workflowId`, and `execLogId`.
+## Cas INBOUND PUSH
 
-The existing INTERNAL/PULL path is unchanged; non-INBOUND commands are written to the Hop metadata file as received.
+Pour les commandes interop de type INBOUND, le consumer accepte un envelope similaire à celui du backend. Si la source est de type `PUSH`, il matérialise les données déjà normalisées en CSV temporaire pour permettre l’exécution via Hop, tout en conservant les métadonnées de corrélation et de contexte métier.
 
-For INBOUND failures, the consumer publishes the DLQ entry in the interop NoSQL error shape:
+Le chemin classique `INTERNAL` ou `PULL` reste inchangé.
 
-```json
-{
-  "log_id": "execution-log-id",
-  "source_id": "external-system",
-  "workflow_id": "workflow-id",
-  "standard_id": "standard-id",
-  "correlation_id": "correlation-id",
-  "openhim_transaction_id": "openhim-transaction-id",
-  "error_context": {
-    "step": "PIPELINE_CONSUMER",
-    "message": "error",
-    "severity": "ERROR"
-  },
-  "original_data": {
-    "command": {}
-  },
-  "timestamp": "..."
-}
+## Gestion des erreurs
+
+En cas d’échec non récupérable, le consumer publie un message dans la DLQ avec un contexte d’erreur exploitable par l’ops et l’API.
+
+## Profil Hop : Windows vs Linux
+
+Le service détecte automatiquement le système d’exploitation au démarrage :
+- Windows → profil `windows` avec `hop-run.bat` et chemins Windows ;
+- Linux / Docker → profil `linux` avec `hop-run.sh` et chemins Linux.
+
+Pour forcer un profil :
+
+```bash
+SPRING_PROFILES_ACTIVE=windows java -jar target/pipeline-consumer-0.0.1-SNAPSHOT.jar
 ```
 
-## Profil OS (Hop) — Windows vs Linux
+Les valeurs Hop peuvent être surchargées par variables d’environnement `HOP_*` :
+- `HOP_HOME`
+- `HOP_RUN_SCRIPT`
+- `HOP_WORKFLOW_FILE`
+- `HOP_PIPELINES_DIR`
+- `HOP_TEMP_DIR`
 
-Le service détecte automatiquement l'OS au démarrage et active le profil Spring
-correspondant si aucun n'est fourni explicitement :
-- **Windows** → profil `windows` (`hop-run.bat`, chemins `C:/...`)
-- **Linux / Docker** → profil `linux` (`hop-run.sh`, `/opt/hop`)
+## Points utiles
 
-**En dev Windows : aucune action requise** — le profil `windows` est activé tout seul.
+- ce service est un composant d’orchestration technique ;
+- il ne remplace pas la logique métier de l’API ;
+- il doit rester robuste face aux erreurs de traitement et aux messages dupliqués.
 
-Pour forcer un profil : `--spring.profiles.active=windows` (ou `SPRING_PROFILES_ACTIVE=windows`).
-Un profil fourni manuellement n'est jamais écrasé par l'auto-détection.
-
-Les valeurs Hop par profil sont dans `application.yml` (blocs `on-profile: linux` /
-`on-profile: windows`) et surchargeables par variables d'environnement `HOP_*` :
-`HOP_HOME`, `HOP_RUN_SCRIPT`, `HOP_WORKFLOW_FILE`, `HOP_PIPELINES_DIR`, `HOP_TEMP_DIR`.
-
-Au démarrage, un log `Hop config → home=... script=... workflow=...` affiche les valeurs
-réellement chargées ; un `WARN` explicite signale un script Hop introuvable.
-
-> ⚠️ Après modification de `application.yml`, relancer `mvn clean package` : la config
-> est copiée dans `target/classes/` au build — lancer un vieux JAR/`target` utiliserait
-> l'ancienne config (cause classique de « profil actif mais valeurs par défaut »).

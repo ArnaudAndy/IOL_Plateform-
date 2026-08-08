@@ -1,57 +1,35 @@
-# Backend — api-core
+# Backend
 
-Spring Boot API — ETL piloté par métadonnées, multi-sources, assistant SQL IA.
+Ce dossier contient la partie serveur du projet IOL ETL.
 
-## Prérequis
+## Structure principale
 
-- Java 17+
-- Maven 3.9+
-- Docker + Docker Compose
+- api-core : API Spring Boot principale, orchestration, sécurité et logique métier.
+- source-gateway : lecture des sources externes et préparation des données.
+- pipeline-consumer : consommation des messages, contrôle d’intégrité et exécution.
+- iol-mediator : médiateurs et composants d’intégration.
+- openhim : configuration OpenHIM et médiateurs associés.
+- keycloak, vault, mongodb, postgres, rustfs, kafka : services d’infrastructure.
+- ops : scripts d’exploitation, sécurité et automatisation.
 
-## Démarrage
+## Démarrage rapide
 
 ```bash
-# 1. Infrastructure
+cd backend
+cp .env.example .env
 docker compose up -d
+```
 
-# 2. (Optionnel) Cles backend pour l'assistant SQL schema-only
-export GEMINI_API_KEY="votre_cle"
-export GROQ_API_KEY="votre_cle"
+## Développement local
 
-# 3. Compiler et lancer
-cd api-core
+```bash
+cd backend/api-core
 mvn spring-boot:run
 ```
 
-## Swagger
+## Points importants
 
-```
-http://localhost:8084/swagger-ui.html   ← interface interactive
-http://localhost:8084/api-docs          ← JSON OpenAPI 3.0
-```
-
-**Utilisation avec JWT :**
-1. `POST /api/auth/login` → copier le `token`
-2. Cliquer **Authorize** (🔓) → saisir `Bearer <token>`
-
-## Endpoints principaux
-
-| Méthode | URL | Rôle requis |
-|---------|-----|-------------|
-| POST | `/api/auth/register` | — |
-| POST | `/api/auth/login` | — |
-| GET | `/api/workflows` | USER, ADMIN |
-| POST | `/api/workflows` | ADMIN |
-| POST | `/api/workflows/discover` | USER, ADMIN |
-| POST | `/api/orchestrator/run/{id}` | ADMIN |
-| GET | `/api/logs/{workflowId}` | USER, ADMIN |
-| POST | `/api/ai/generate-schema-sql` | USER, ADMIN |
-
-## Services Docker (`docker-compose.yml`)
-
-| Service | Port | Usage |
-|---------|------|-------|
-| PostgreSQL | 5432 | Lakehouse Bronze/Silver/Gold |
-| MongoDB | 27017 | Métadonnées workflows |
-| Kafka | 9092 | Bus événementiel pipelines |
-| Zookeeper | 2181 | Coordination Kafka |
+- Le backend est le point central du contrôle du système.
+- Les secrets doivent rester hors du dépôt.
+- Les services d’infrastructure sont gérés via Docker Compose.
+- Le module api-core est le cœur fonctionnel de l’application.

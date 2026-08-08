@@ -1,262 +1,65 @@
-# Runbook de production IOL
+# Runbook de mise en service
 
-Reference : 5 aout 2026. Ce document est la procedure d'exploitation de la
-plateforme. Une configuration Compose valide est une repetition de topologie ;
-elle ne prouve pas la haute disponibilite tant que les noeuds restent sur le
-meme hote.
+Ce document décrit la procédure pratique à suivre pour mettre en service le dépôt dans un environnement cible. Il est volontairement conservé à un niveau simple, car la topologie complète de production n’a pas encore été entièrement qualifiée ici.
 
-## 1. Verdict actuel
+## 1. État actuel
 
-Le depot est un **candidat de preproduction durci**, pas encore un `GO`
-production. Les controles sont implementes, mais les preuves finales doivent
-etre obtenues dans l'environnement cible.
+Le dépôt contient une stack fonctionnelle de base avec :
+- frontend React/Vite ;
+- backend Spring Boot ;
+- services d’infrastructure via Docker Compose ;
+- composants de sécurité et d’intégration comme Keycloak, Vault, Kafka, RustFS, OpenHIM et ClamAV.
 
-| Domaine | Implemente dans le depot | Preuve encore obligatoire |
-| --- | --- | --- |
-| Credentials metier | Vault Transit, enveloppes et migration du plaintext | cluster Vault cible, auto-unseal et rotation testes |
-| Identite | Keycloak OIDC, PKCE, MFA, roles humains/services | bootstrap, SMTP, federation et reprise testes |
-| Communications | TLS/mTLS, certificats clients et ACL Kafka | PKI organisationnelle et capture reseau de validation |
-| Kafka | 3 brokers KRaft, RF=3, ISR=2, ACL fail-closed | perte d'un hote et rebalance sous charge |
-| MongoDB | replica set a 3 membres, TLS et comptes limites | election et restauration sur trois hotes |
-| RustFS | 4 noeuds, TLS, KMS Vault et load balancer | version cible certifiee et perte de disque/hote |
-| Sauvegarde | cycle, empreintes, restauration isolee, Restic | Vault inclus et restauration hors site chronometree |
-| Livraison | images immuables, scan, SBOM, provenance, signature ; moteurs Python embarques dans l'image | protections GitHub et environnement d'approbation actifs |
-| Multi-organisation | contrats seulement | **NO-GO** ; garder `SINGLE_ORGANIZATION` |
+La plateforme est donc opérationnelle pour des usages de préproduction et d’intégration, mais la mise en production complète exige encore des validations spécifiques à l’environnement.
 
-RustFS est epingle sur une version pre-GA (`1.0.0-beta.12`). Ce choix est assume,
-mais il impose une contrepartie: prouver sur VOTRE infrastructure ce que
-l'editeur ne garantit pas encore contractuellement.
+## 2. Pré-requis
 
-```bash
-export CONFIRM_QUALIFICATION=IOL-RUSTFS-QUALIFICATION
-export IOL_PRODUCTION_ENV_FILE="$PWD/backend/.env.production"
-bash backend/ops/tests/rustfs-qualification.sh
-```
+Avant toute mise en service :
+1. préparer un environnement Linux/Windows avec Docker Compose fonctionnel ;
+2. fournir les secrets nécessaires via variables d’environnement ou stockage sécurisé ;
+3. vérifier que le frontend est construit avant d’exposer l’interface ;
+4. vérifier la connectivité entre les services internes.
 
-Le script verifie ce que `ha-failover.sh` ne couvre pas: un magasin peut
-repondre « sain » tout en ayant perdu des donnees. Il eprouve donc le multipart
-a la taille de production, l'INTEGRITE SHA-256 apres perte d'un noeud, la
-reconstruction au retour du noeud, et le chiffrement au repos par depot d'un
-canari recherche en clair sur le volume.
-
-La porte de securite refuse le demarrage tant que ce script est absent du depot,
-et exige que les quatre noeuds partagent une version figee. Conservez la sortie
-du script: elle constitue la preuve de qualification.
-
-## 2. Topologie cible
-
-```mermaid
-flowchart TB
-    U[Utilisateurs et partenaires] --> W[WAF / reverse proxy public]
-    W --> N[Nginx IOL]
-    N --> A[api-core x N]
-    N --> KC[Keycloak x 2 ou plus]
-    A --> K[Kafka KRaft x 3]
-    K --> C[pipeline-consumer x N]
-    A --> M[MongoDB replica set x 3]
-    A --> P[PostgreSQL HA]
-    A --> R[RustFS x 4]
-    C --> R
-    A --> V[Vault Raft x 3]
-    R --> V
-    O[OpenHIM + mediateurs] --> A
-    B[Depot Restic hors site] -. sauvegardes chiffrees .-> P
-    B -. sauvegardes chiffrees .-> M
-    B -. sauvegardes chiffrees .-> R
-    B -. snapshots .-> V
-```
-
-Placez les replicas Kafka, MongoDB, RustFS, Vault et Keycloak dans des domaines
-de panne differents. Les volumes ne doivent pas partager le meme disque, le
-meme hyperviseur, la meme alimentation ou la meme zone de disponibilite. Pour
-un vrai deploiement multi-hote, transposez les contraintes Compose dans
-Kubernetes, Nomad ou votre orchestrateur ; ne lancez pas simplement le fichier
-Compose sur un serveur plus gros.
-
-PostgreSQL et le Spark master ne disposent pas encore d'une topologie HA
-complete dans ce depot. Utilisez un PostgreSQL manage ou Patroni, et qualifiez
-la reprise du plan de controle Spark avant le `GO`.
-
-## 3. Prerequis externes
-
-Avant toute installation :
-
-1. Reserver les DNS, adresses, load balancers et domaines de panne.
-2. Fournir une CA organisationnelle et une procedure de revocation.
-3. Fournir un KMS/HSM externe pour l'auto-unseal Vault.
-4. Fournir un depot S3 hors site pour Restic avec Object Lock si disponible.
-5. Fournir SMTP avec STARTTLS pour Keycloak.
-6. Creer les groupes d'astreinte, les canaux d'alerte et les responsables de
-   donnees.
-7. Fixer RPO, RTO, retention, classification et fenetres de maintenance.
-8. Activer les protections de branche et l'environnement GitHub `production`.
-
-Les secrets Gemini et Groq precedemment partages doivent etre revoques chez les
-deux fournisseurs. Generer de nouvelles cles directement dans le gestionnaire
-de secrets ; ne jamais reutiliser les valeurs historiques.
-
-## 4. Construire une release
-
-Une release est identifiee par un tag immuable, jamais par `latest`.
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-Le workflow `.github/workflows/release.yml` execute la CI, exige l'approbation
-de l'environnement GitHub, construit toutes les images IOL, lance Trivy,
-publie un SBOM et une provenance, puis signe les images avec Cosign/OIDC.
-
-Sur GitHub, rendre obligatoires avant fusion :
-
-- la verification `Porte de qualite` ;
-- une pull request approuvee ;
-- la resolution des conversations ;
-- l'interdiction du force-push et de la suppression de branche ;
-- l'approbation de l'environnement `production` par une personne distincte ;
-- la signature ou l'attestation des artefacts selon votre politique.
-
-## 5. Preparer l'environnement
-
-Executez les scripts Bash depuis Linux, WSL2 ou Git Bash.
+## 3. Démarrage de base
 
 ```bash
 cd backend
-cp .env.production.example .env.production
+cp .env.example .env
+cd ../frontend
+npm ci
+npm run build
+cd ../backend
+docker compose up -d
 ```
 
-Remplacer au minimum `IOL_RELEASE_TAG`, `IOL_PUBLIC_URL`,
-`IOL_PUBLIC_HOSTNAME`, le depot Restic, SMTP et les capacites de workers. Le
-fichier ne doit contenir aucun mot de passe, token ou cle API.
+## 4. Vérification minimale
 
-Pour une repetition de preproduction seulement :
+Après démarrage, vérifier :
+- l’interface sur http://localhost ;
+- l’API via l’endpoint de base ou le proxy Nginx ;
+- les services Docker avec `docker compose ps` ;
+- la santé du backend si l’endpoint est disponible.
 
-```bash
-bash ops/secrets/generate-runtime-secrets.sh
-bash ops/pki/generate-preprod-pki.sh
-```
+## 5. Sécurité minimale
 
-En production, injecter les secrets par l'orchestrateur et remplacer la CA de
-preproduction par la PKI organisationnelle. Ecrire les nouvelles cles IA dans
-`backend/secrets/gemini-api-key` et `backend/secrets/groq-api-key` uniquement
-sur un poste d'administration securise. Les fichiers sont exclus de Git.
+Avant toute utilisation sensible :
+- ne jamais committer les secrets ;
+- garder les clés hors du dépôt ;
+- vérifier que ClamAV est bien actif pour les uploads ;
+- contrôler les accès à Keycloak et Vault ;
+- éviter l’exposition directe des services internes au réseau public.
 
-Configurer `vault/config/seal.hcl` avec le KMS/HSM externe, puis :
+## 6. Rollback simple
 
-```bash
-IOL_PRODUCTION_ENV_FILE="$PWD/.env.production" \
-  bash ops/production/prepare-host.sh
-bash vault/render-configs.sh
-docker compose --env-file .env.production \
-  -f vault/docker-compose.vault-ha.yml up -d vault-1 vault-2 vault-3
-```
+Si un déploiement ne se passe pas correctement :
+1. stopper la pile avec `docker compose down` ;
+2. vérifier les logs des services concernés ;
+3. corriger la configuration ou les secrets ;
+4. redémarrer la pile proprement.
 
-Initialiser Vault selon la procedure de ceremony de cles de l'organisation.
-Placer temporairement le token root dans
-`secrets/vault-bootstrap-root-token`, puis executer une seule fois :
+## 7. À garder en tête
 
-```bash
-docker compose --profile bootstrap --env-file .env.production \
-  -f vault/docker-compose.vault-ha.yml run --rm vault-bootstrap
-rm secrets/vault-bootstrap-root-token
-```
-
-Le bootstrap cree les cles Transit, les politiques, les AppRoles, le jeton KMS
-periodique RustFS et l'audit. Le token root est revoque par le script. Conserver
-les parts de recuperation Vault hors ligne selon la separation des roles.
-
-## 6. Preflight et demarrage
-
-Le preflight refuse notamment un tag factice, un secret en clair, un certificat
-proche de l'expiration, une topologie incomplete, une ACL desactivee, l'absence
-du KMS Vault ou un reseau Vault non interne.
-
-```bash
-cd backend
-IOL_PRODUCTION_ENV_FILE="$PWD/.env.production" \
-  bash ops/production/preflight.sh
-
-docker compose --env-file .env.production \
-  -f docker-compose.yml -f docker-compose.production.yml \
-  pull
-docker compose --env-file .env.production \
-  -f docker-compose.yml -f docker-compose.production.yml \
-  up -d --no-build
-```
-
-Initialiser Keycloak une seule fois, apres readiness de PostgreSQL et des deux
-noeuds Keycloak :
-
-```bash
-docker compose --profile bootstrap --env-file .env.production \
-  -f docker-compose.yml -f docker-compose.production.yml \
-  run --rm keycloak-bootstrap
-```
-
-Le script configure les secrets clients, SMTP, les roles, l'administrateur IOL
-temporaire et supprime l'administrateur de bootstrap du realm `master`.
-L'administrateur IOL doit changer son mot de passe et enroler TOTP a sa premiere
-connexion.
-
-Demarrer ensuite OpenHIM et les mediateurs :
-
-```bash
-docker compose --env-file .env.production \
-  -f openhim/docker-compose.openhim.yml \
-  -f openhim/docker-compose.openhim.production.yml \
-  up -d --no-build
-```
-
-## 7. Verification avant trafic
-
-Ne pas se contenter de `docker compose ps`. Verifier :
-
-```bash
-curl --fail --cacert secrets/runtime-tls/nginx/ca.pem \
-  "${IOL_PUBLIC_URL}/health/ready"
-python ../scripts/validate_production_security.py
-```
-
-Controle manuel obligatoire :
-
-- tous les healthchecks sont `healthy` et stables pendant au moins 30 minutes ;
-- Vault est `unsealed`, possede trois peers et ecrit son audit ;
-- Kafka a trois voters, aucun under-replicated partition et toutes les ACL ;
-- MongoDB a un PRIMARY et deux SECONDARY sans retard anormal ;
-- RustFS voit quatre noeuds et le chiffrement KMS est effectif ;
-- Keycloak voit deux noeuds, SMTP fonctionne et le bootstrap master a disparu ;
-- un certificat inconnu est refuse sur chaque liaison mTLS ;
-- les ports Kafka, Mongo, RustFS, mediateurs et API interne ne sont pas publics ;
-- OpenHIM ne conserve pas les corps sensibles ;
-- les logs ne contiennent ni credential, ni token, ni ligne de donnees.
-
-## 8. Sauvegarde et restauration
-
-Le timer `backend/ops/systemd/iol-backup.timer` appelle le cycle complet. Chaque
-sauvegarde contient des empreintes SHA-256 et n'est valide qu'apres une
-restauration isolee, puis un envoi Restic hors site.
-
-```bash
-cd backend
-VAULT_BACKUP_ENABLED=true \
-RESTORE_TEST_AFTER_BACKUP=true \
-REQUIRE_OFFSITE_BACKUP=true \
-bash ops/backup/backup-cycle.sh
-```
-
-La restauration test couvre PostgreSQL IOL, PostgreSQL Keycloak, MongoDB IOL,
-MongoDB OpenHIM, archives de fichiers, objets S3/RustFS, metadonnees Kafka et
-l'inspection du snapshot Vault. L'export Kafka n'est pas une sauvegarde des
-messages : la retention et la replication Kafka servent a la reprise courte ;
-les donnees durables restent dans leurs systemes de reference.
-
-Une preuve exploitable doit indiquer : horodatage, release, taille, nombre
-d'objets/documents, resultat SHA-256, RPO observe et duree de restauration. Une
-restauration testee sur le poste developpeur ne remplace pas un exercice depuis
-le depot hors site.
-
-## 9. Charge, panne et reprise
+Le dépôt contient la structure de production attendue, mais la qualification réelle reste à faire dans l’environnement cible. La documentation doit donc rester pragmatique et s’appuyer sur les preuves observées, pas sur des hypothèses de niveau production.
 
 ### Points de defaillance unique restants
 

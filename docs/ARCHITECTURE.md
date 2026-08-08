@@ -1,262 +1,48 @@
-# Architecture IOL
+# Architecture actuelle
 
-Date de reference : 5 aout 2026
+Ce document décrit l’architecture telle qu’elle apparaît dans le dépôt actuel. Il ne prétend pas couvrir une version future ou une topologie de production complètement qualifiée.
 
-Portee : interface, identite, ETL, interoperabilite, IA schema-only,
-stockages, securite et exploitation.
+## Vue d’ensemble
 
-## Modele mental
+Le système est organisé autour de trois plans :
+- un plan de contrôle, avec l’interface web, l’API, l’authentification et les métadonnées ;
+- un plan de transport, avec Kafka et RustFS ;
+- un plan d’exécution, avec le consumer de pipeline et les moteurs Hop/Spark.
 
-IOL n'est pas un outil de reporting. Sa responsabilite est de deplacer,
-normaliser, controler et partager des donnees entre systemes. Les outils de
-visualisation restent en aval et hors du coeur de la plateforme.
+## Composants présents
 
-L'architecture se lit en deux plans :
+| Composant | Rôle actuel |
+| --- | --- |
+| Frontend | Console React/Vite pour la configuration et le suivi |
+| api-core | API Spring Boot, orchestration, sécurité, logique métier |
+| source-gateway | Lecture des sources et préparation des données |
+| pipeline-consumer | Réception des messages, contrôle d’intégrité et exécution |
+| Nginx | Point d’entrée unique pour l’interface et l’API |
+| Kafka | Transport des messages et commandes |
+| RustFS | Stockage temporaire pour les gros volumes |
+| MongoDB | Métadonnées workflows et journaux |
+| PostgreSQL | Données d’application, état et identités selon la configuration |
+| Keycloak | Authentification et gestion des comptes |
+| Vault | Gestion de secrets et intégration de sécurité |
+| OpenHIM + médiateurs | Interopérabilité et adaptation de messages |
+| ClamAV | Analyse antivirus des uploads |
 
-- le plan de controle contient les utilisateurs, connexions chiffrees,
-  workflows, normes, contrats, statuts et journaux ;
-- le plan de donnees transporte les lignes et fichiers vers l'execution, puis
-  vers Bronze, Silver et Gold.
+## Flux courant
 
-```mermaid
-flowchart TB
-  subgraph CONTROL[Plan de controle]
-    WEB[Console React]
-    KC[Keycloak]
-    API[api-core]
-    MONGO[(MongoDB metadata)]
-    VAULT[Vault Transit]
-    WEB --> KC --> API
-    API --> MONGO
-    API --> VAULT
-  end
-  subgraph DATA[Plan de donnees]
-    SRC[(Systeme source)] --> API
-    API --> KAFKA[(Kafka)]
-    API --> RUST[(RustFS Big Data)]
-    KAFKA --> CONSUMER[pipeline-consumer]
-    RUST --> CONSUMER
-    CONSUMER --> ENGINE[Hop local ou Spark]
-    ENGINE --> DEST[(Destination)]
-  end
-```
+1. L’utilisateur configure une source, une destination et un workflow.
+2. L’API prépare l’exécution.
+3. Les données sont transportées via Kafka ou RustFS selon le contexte.
+4. Le consumer exécute le traitement puis écrit vers la destination finale.
 
-Les metadonnees pilotent l'execution, mais ne contiennent jamais un mot de
-passe en clair. Les donnees source ne transitent jamais directement de la
-source vers Hop ou Spark.
+## Limite importante
 
-## Composants
+Le dépôt contient une base d’architecture fonctionnelle, mais pas une topologie de production entièrement validée. Les services sont définis dans la stack Docker Compose, mais leur qualification opérationnelle reste à faire dans l’environnement cible.
 
-| Composant | Responsabilite | Stockage durable |
-| --- | --- | --- |
-| `frontend` | Intention utilisateur, configuration et suivi | Aucun |
-| Keycloak | OIDC, PKCE, MFA, roles humains et comptes de service | PostgreSQL `keycloak` |
-| `api-core` | API, seul lecteur des sources, decision de charge, chiffrement | MongoDB et PostgreSQL |
-| Kafka | Donnees normales, commandes, statuts, DLQ | Journaux repliques |
-| RustFS | Artefacts Big Data temporaires chiffres par KMS | Objets distribues |
-| `pipeline-consumer` | Integrite, verrou distribue, execution, heartbeat | PostgreSQL et fichiers temporaires |
-| Hop / Python local | Traitement borne d'un artefact transporte | Destination |
-| Spark | Traitement distribue d'un artefact transporte | Destination |
-| OpenHIM + mediateurs | Routage, adaptation et audit d'interoperabilite | MongoDB sans corps sensibles |
-| Vault | Cle Transit, ACL et audit cryptographique | Raft chiffre et snapshots |
+## Points de structure
 
-## Cycle d'un workflow
-
-```mermaid
-stateDiagram-v2
-  [*] --> DRAFT
-  DRAFT --> READY: validation de configuration
-  READY --> QUEUED: demande d'execution
-  QUEUED --> EXTRACTING: api-core lit la source
-  EXTRACTING --> TRANSPORTED: Kafka ou RustFS
-  TRANSPORTED --> BRONZE
-  BRONZE --> SILVER
-  SILVER --> GOLD
-  GOLD --> SUCCESS
-  EXTRACTING --> FAILED
-  BRONZE --> FAILED
-  SILVER --> FAILED
-  GOLD --> FAILED
-  FAILED --> QUEUED: rejeu controle
-```
-
-Chaque progression porte `workflowId`, `execLogId`, etape, horodatage et
-diagnostic. Le monitoring n'affiche comme bloquante que l'etape courante ; la
-console historique conserve les erreurs techniques expurgees. Un watchdog
-termine en `FAILED` une execution dont le heartbeat a expire, ce qui evite un
-`IN_PROGRESS` infini.
-
-## Decision d'architecture
-
-La connexion a la source appartient exclusivement a `api-core`.
-
-- Hop ne se connecte jamais a la source.
-- Spark ne se connecte jamais a la source.
-- Pour un volume normal, Kafka transporte toutes les donnees.
-- Pour un volume Big Data, `api-core` diffuse les donnees vers RustFS et Kafka
-  transporte uniquement un manifeste verifiable.
-- JDBC n'est converti ni en CSV LOCAL, ni en CSV SPARK. Il est serialise en
-  lignes JSON typees.
-- L'utilisateur metier ne choisit ni Hop, ni Spark, ni Kafka, ni RustFS.
-
-La base cible reste differente de la source : Hop ou Spark recoivent les
-identifiants de destination parce qu'ils doivent ecrire Bronze/Silver/Gold, mais
-ils ne recoivent ni requete, ni URL, ni utilisateur, ni mot de passe source.
-
-## Reponses directes
-
-### Kafka transporte-t-il vraiment les donnees ?
-
-Oui, pour les executions de volume normal :
-
-1. `api-core` ouvre la source JDBC en lecture seule.
-2. Il execute une unique requete `SELECT/WITH` validee.
-3. Il lit le resultat avec un curseur JDBC borne.
-4. Il serialise les valeurs en lots JSON types.
-5. Chaque lot est publie dans Kafka avec la meme cle de partition.
-6. La commande finale contient le nombre de lots, le nombre de lignes, la taille
-   canonique et le SHA-256.
-7. `pipeline-consumer` reconstruit un fichier JSON Lines dans l'ordre et refuse
-   l'execution si un lot manque ou si le SHA-256 differe.
-
-Kafka ne contient donc pas seulement une commande : il contient bien toutes les
-donnees du chemin normal.
-
-### Quand RustFS est-il utilise ?
-
-RustFS est utilise automatiquement quand le diagnostic choisit le chemin Big
-Data (`executionMode=SPARK`). Il sert aussi de repli automatique si une ligne
-JDBC unique depasse la taille maximale d'un evenement Kafka.
-
-Pour JDBC Big Data, `api-core` n'ecrit pas d'abord tout le resultat sur son
-disque. Il envoie un multipart streaming vers RustFS avec une fenetre memoire
-bornee a 64 Mio par defaut et calcule le SHA-256 pendant le transfert.
-
-### Pourquoi Hop ne doit-il pas lire la source directement ?
-
-- les secrets source restent dans un seul service ;
-- la politique de lecture et les timeouts sont centralises ;
-- Kafka donne un contrat ordonne et rejouable ;
-- RustFS absorbe les volumes qui ne doivent pas saturer Kafka ;
-- Hop et Spark travaillent sur le meme artefact, donc le resultat ne depend pas
-  du moteur choisi ;
-- un ancien message contenant une source JDBC directe est refuse avant
-  l'execution.
-
-## Vue generale
-
-```mermaid
-flowchart LR
-  UI[Utilisateur metier] --> API[api-core]
-  API --> META[(MongoDB)]
-  API --> SRC[(Source)]
-  API --> DECISION{Diagnostic automatique}
-  DECISION -->|volume normal| KDATA[(Kafka : donnees + commande)]
-  DECISION -->|Big Data| RUST[(RustFS : donnees)]
-  RUST -->|manifeste SHA-256| KDATA
-  KDATA --> CONSUMER[pipeline-consumer]
-  CONSUMER --> VERIFY[Reconstruction et controle]
-  VERIFY -->|LOCAL| HOP[Hop + moteur local]
-  VERIFY -->|SPARK| SPARK[Spark distribue]
-  HOP --> TARGET[(Destination Bronze / Silver / Gold)]
-  SPARK --> TARGET
-  CONSUMER --> STATUS[(Kafka status / DLQ)]
-  STATUS --> API
-```
-
-## Frontiere de securite
-
-```mermaid
-flowchart TB
-  subgraph SOURCE_ZONE[Zone acces source]
-    SOURCE[(Source JDBC/API/fichier)]
-    API[api-core]
-    SOURCE --> API
-  end
-
-  subgraph TRANSPORT[Zone transport]
-    KAFKA[(Kafka)]
-    RUST[(RustFS)]
-  end
-
-  subgraph EXECUTION[Zone execution]
-    CONSUMER[pipeline-consumer]
-    HOP[Hop]
-    SPARK[Spark]
-  end
-
-  API -->|donnees normales| KAFKA
-  API -->|donnees Big Data| RUST
-  API -->|commande ou manifeste| KAFKA
-  KAFKA --> CONSUMER
-  RUST --> CONSUMER
-  CONSUMER --> HOP
-  CONSUMER --> SPARK
-```
-
-La fleche source s'arrete a `api-core`. Il n'existe aucune fleche Source -> Hop
-ou Source -> Spark.
-
-## Decision automatique
-
-```mermaid
-flowchart TD
-  START[Execution demandee] --> ASSESS[Diagnostic dans api-core]
-  ASSESS --> JDBC{Source JDBC ?}
-  JDBC -->|oui| COUNT[COUNT borne par timeout]
-  JDBC -->|non| SIZE[Taille fichier ou borne API]
-  COUNT -->|sous le seuil| LOCAL[Runtime LOCAL + transport Kafka]
-  COUNT -->|au-dessus ou incertain| BIG[Runtime SPARK + transport RustFS]
-  SIZE -->|standard| LOCAL
-  SIZE -->|gros| BIG
-  LOCAL --> COMMAND[Commande finale Kafka]
-  BIG --> STREAM[Streaming multipart RustFS]
-  STREAM --> COMMAND
-```
-
-Le diagnostic est audite dans `loadAssessment` avec les estimations, la raison
-et le niveau de certitude. En configuration de production,
-`SPARK_ROW_THRESHOLD` vaut 10 000 000 lignes et
-`SPARK_FILE_SIZE_THRESHOLD_BYTES` vaut 2 Gio. Un volume JDBC inconnu bascule
-vers SPARK par prudence.
-
-L'ancien choix manuel `transport_mode` n'impose plus RustFS pour un petit
-fichier. La plateforme applique elle-meme la politique :
-
-| Charge | Transport | Runtime |
-| --- | --- | --- |
-| Normale | Donnees completes dans Kafka | LOCAL |
-| Big Data | Donnees dans RustFS, manifeste dans Kafka | SPARK |
-| Ligne JDBC > limite Kafka | RustFS automatique | LOCAL ou SPARK selon charge |
-
-## Chemin LOCAL
-
-```mermaid
-sequenceDiagram
-  participant A as api-core
-  participant S as Source JDBC
-  participant K as Kafka
-  participant C as pipeline-consumer
-  participant H as Hop / moteur local
-  participant D as Destination
-
-  A->>S: SELECT/WITH en lecture seule
-  loop Lots bornes
-    S-->>A: lignes JDBC
-    A->>K: PIPELINE_SOURCE_ROW_BATCH JSON
-  end
-  A->>K: commande + manifeste + SHA-256
-  K->>C: lots ordonnes puis commande
-  C->>C: JSON Lines + controle d'integrite
-  C->>H: chemin de l'artefact, aucun secret source
-  H->>D: Bronze puis Silver/Gold
-```
-
-Le moteur local lit JSON Lines par morceaux avec Pandas. Aucun CSV JDBC n'est
-cree. Les fichiers fournis par l'utilisateur conservent leur format natif et
-sont transportes en morceaux Kafka.
-
-## Chemin Big Data
+- Le backend est le point central de contrôle.
+- Les secrets ne doivent pas être commités dans Git.
+- Les sources ne sont pas directement exposées aux moteurs d’exécution ; l’API reste le seul point d’accès à la source au cours du traitement.
 
 ```mermaid
 sequenceDiagram
