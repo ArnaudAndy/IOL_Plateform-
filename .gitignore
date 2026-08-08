@@ -24,3 +24,4 @@ backend/secrets/
 backend/keycloak/generated/
 reports/
 /.scripts/
+/scripts/
