@@ -1,19 +1,17 @@
 # IOL — Plateforme ETL pilotée par métadonnées
 
-Plateforme d'intégration de données pour le secteur de la santé. L'utilisateur
+Plateforme d'intégration de données . L'utilisateur
 décrit une **intention métier** ; la plateforme choisit seule le transport et le
 moteur d'exécution.
 
 > **État : préproduction durcie — pas encore un GO production.**
-> Lisez [Suis-je prêt pour la production ?](#suis-je-prêt-pour-la-production)
-> avant tout déploiement réel. Cette section n'est pas optionnelle.
+
 
 ---
 
 ## Sommaire
 
 - [Ce que fait la plateforme](#ce-que-fait-la-plateforme)
-- [Les deux règles qui expliquent tout](#les-deux-règles-qui-expliquent-tout)
 - [Architecture](#architecture)
 - [Prérequis](#prérequis)
 - [Démarrage rapide avec Docker](#démarrage-rapide-avec-docker)
@@ -23,7 +21,6 @@ moteur d'exécution.
 - [Développement sans Docker](#développement-sans-docker)
 - [Tests](#tests)
 - [Dépannage](#dépannage)
-- [Suis-je prêt pour la production ?](#suis-je-prêt-pour-la-production)
 - [Sécurité](#sécurité)
 - [Documentation](#documentation)
 
@@ -49,22 +46,6 @@ Snowflake, Redshift, plus fichiers CSV, JSON, Parquet et Excel.
 
 ---
 
-## Les deux règles qui expliquent tout
-
-Presque chaque décision d'architecture découle de ces deux règles. En les gardant
-à l'esprit, le reste du code devient prévisible.
-
-**1. Un seul composant lit la source.** Ni Hop, ni Spark, ni le consumer
-n'ouvrent de connexion vers la base d'un client. Les données sont extraites puis
-*transportées* jusqu'au moteur, qui reçoit un artefact déjà matérialisé — jamais
-les identifiants de la source.
-
-**2. La plateforme orchestre, le moteur exécute.** IOL décide quoi faire et où
-l'envoyer. Hop et Spark font le travail. C'est de l'**ELT** : les données brutes
-atterrissent d'abord, la transformation se fait ensuite en SQL dans la base de
-destination.
-
----
 
 ## Architecture
 
@@ -367,36 +348,6 @@ docker compose down -v && docker compose up -d --build
 
 ---
 
-## Suis-je prêt pour la production ?
-
-**Non — et voici précisément ce qui manque.**
-
-Le dépôt est un **candidat de préproduction durci**. Le code est sain et les
-mécanismes de sécurité sont réels, mais des preuves d'exploitation manquent.
-
-### Ce qui est solide
-
-- **234 tests** verts, aucun TODO ni FIXME dans le code
-- Le backend **refuse de démarrer** en production sans TLS, mTLS, Keycloak,
-  Vault Transit et ClamAV en mode fail-closed
-- **80+ invariants de topologie** vérifiés en intégration continue
-- L'assistant IA ne reçoit **jamais** de données : neuf motifs bloquent emails,
-  identifiants, adresses IP, dates et URL de connexion avant tout appel externe
-- Mots de passe chiffrés par enveloppe Vault, jamais en clair dans les messages
-- SQL utilisateur validé par analyse syntaxique réelle, pas par expressions
-  régulières
-
-### Bloqueurs à traiter
-
-| Priorité | Point | Action |
-|---|---|---|
-| 🔴 | **Clés API à rotationner** | Révoquer les clés Gemini et Groq de développement, en créer pour la production |
-| 🔴 | **Magasin d'objets à qualifier** | RustFS `1.0.0-beta.12` est pré-GA. Exécutez `backend/ops/tests/rustfs-qualification.sh` sur l'infrastructure cible et conservez sa sortie — la porte de sécurité l'exige |
-| 🟠 | **PostgreSQL en instance unique** | Il porte le verrou d'exécution : sa perte arrête la chaîne. Patroni ou repmgr derrière PgBouncer |
-| 🟠 | **Nginx en instance unique** | Seul point d'entrée public. keepalived et IP flottante, ou un répartiteur en amont |
-| 🟠 | **Restauration non prouvée** | Exécuter un cycle complet de sauvegarde puis restauration hors site |
-| 🟠 | **Tests de charge absents** | Les seuils automatiques n'ont jamais été validés sous charge réelle |
-| 🟡 | **Multi-organisation non isolé** | Rester à **une organisation par instance** |
 
 ### Points de rupture connus
 
