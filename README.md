@@ -389,15 +389,3 @@ pas d'issue publique.
 
 ---
 
-## Documentation
-
-| Document | Contenu |
-|---|---|
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Architecture détaillée |
-| [CODE_GUIDE.md](docs/CODE_GUIDE.md) | Lecture du code et des flux |
-| [PRODUCTION_RUNBOOK.md](docs/PRODUCTION_RUNBOOK.md) | Procédure d'exploitation |
-| [GUIDE_MISE_EN_PRODUCTION.md](docs/GUIDE_MISE_EN_PRODUCTION.md) | Mise en production |
-| [DURCISSEMENT_PRODUCTION_PHASE_2.md](docs/DURCISSEMENT_PRODUCTION_PHASE_2.md) | Durcissement, phase 2 |
-| [SECURITY.md](docs/SECURITY.md) | Politique de sécurité |
-| [INTEROPERABILITY.md](docs/INTEROPERABILITY.md) | FHIR, ISO 20022, Ed-Fi |
-| [AI_SCHEMA_ONLY.md](docs/AI_SCHEMA_ONLY.md) | Confidentialité de l'assistant IA |
