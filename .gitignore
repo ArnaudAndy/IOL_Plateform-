@@ -29,3 +29,4 @@ backend/backups/
 backend/secrets/
 backend/keycloak/generated/
 reports/
+.scripts/
