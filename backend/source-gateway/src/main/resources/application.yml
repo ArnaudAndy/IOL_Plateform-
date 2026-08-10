@@ -10,9 +10,8 @@ spring:
   application:
     name: source-gateway
 
-  # Metadonnees de workflow, en LECTURE SEULE. Le compte MongoDB de ce service
-  # ne doit disposer d'aucun droit d'ecriture: il lit une configuration, il ne
-  # la modifie jamais.
+  # Le compte MongoDB lit les workflows et n'ecrit que dans sa collection de
+  # reservations `transport_claims`; son role production borne ces privileges.
   data:
     mongodb:
       uri: ${MONGODB_URI:mongodb://localhost:27017/iol_metadata?serverSelectionTimeoutMS=3000&connectTimeoutMS=3000}
@@ -53,7 +52,7 @@ management:
         add-additional-paths: true
       group:
         readiness:
-          include: readinessState,mongo
+          include: readinessState,mongo,sourceGatewayDependencies
   health:
     livenessstate:
       enabled: true
@@ -92,6 +91,7 @@ app:
     topics:
       transport-requests: ${APP_KAFKA_TRANSPORT_TOPIC:iol.transport.requests}
       transport-dlq:      ${APP_KAFKA_TRANSPORT_DLQ_TOPIC:iol.transport.requests.dlq}
+      status:             ${APP_KAFKA_STATUS_TOPIC:iol.pipeline.status}
       # Topics de commande en sortie, choisis selon la priorite du workflow.
       commands:
         high:    ${APP_KAFKA_COMMANDS_HIGH_TOPIC:iol.pipeline.high}
@@ -106,10 +106,45 @@ app:
       # Marge large: sans elle, un gros transport declencherait un rebalance en
       # pleine extraction.
       max-poll-interval-ms: ${APP_KAFKA_MAX_POLL_INTERVAL_MS:1800000}
+      retry-backoff-seconds: ${APP_KAFKA_RETRY_BACKOFF_SECONDS:10}
+      max-attempts: ${APP_KAFKA_MAX_ATTEMPTS:5}
+    producer:
+      status-timeout-seconds: ${APP_KAFKA_STATUS_TIMEOUT_SECONDS:30}
 
   execution:
     # Duree du bail de reservation d'une execution. Au-dela, une autre instance
     # peut reprendre le travail d'un processus disparu.
     claim-lease-seconds: ${APP_EXECUTION_CLAIM_LEASE_SECONDS:1800}
+    claim-heartbeat-seconds: ${APP_EXECUTION_CLAIM_HEARTBEAT_SECONDS:30}
     max-source-connections: ${APP_EXECUTION_MAX_SOURCE_CONNECTIONS:8}
     source-connection-wait-seconds: ${APP_EXECUTION_SOURCE_CONNECTION_WAIT_SECONDS:60}
+
+  # Seuils de production: Kafka reste le transport normal; RustFS est reserve
+  # aux volumes atteignant 10 millions de lignes ou 2 Gio estimes.
+  spark:
+    row:
+      threshold: ${SPARK_ROW_THRESHOLD:10000000}
+    auto-selection:
+      enabled: ${SPARK_AUTO_SELECTION_ENABLED:true}
+      file-size-threshold-bytes: ${SPARK_FILE_SIZE_THRESHOLD_BYTES:2147483648}
+      jdbc-query-timeout-seconds: ${SPARK_ESTIMATION_TIMEOUT_SECONDS:15}
+      jdbc-unknown-mode: ${SPARK_JDBC_UNKNOWN_MODE:SPARK}
+      jdbc-rows-per-partition: ${SPARK_JDBC_ROWS_PER_PARTITION:250000}
+      jdbc-max-partitions: ${SPARK_JDBC_MAX_PARTITIONS:16}
+
+  interop:
+    big-data:
+      row-threshold: ${SPARK_ROW_THRESHOLD:10000000}
+      byte-threshold: ${SPARK_FILE_SIZE_THRESHOLD_BYTES:2147483648}
+
+  object-storage:
+    enabled: ${OBJECT_STORAGE_ENABLED:false}
+    provider: ${OBJECT_STORAGE_PROVIDER:S3}
+    endpoint: ${OBJECT_STORAGE_ENDPOINT:http://localhost:9000}
+    region: ${OBJECT_STORAGE_REGION:us-east-1}
+    bucket: ${OBJECT_STORAGE_BUCKET:iol-source-data}
+    access-key: ${OBJECT_STORAGE_ACCESS_KEY:}
+    secret-key: ${OBJECT_STORAGE_SECRET_KEY:}
+    create-bucket-if-missing: ${OBJECT_STORAGE_CREATE_BUCKET_IF_MISSING:true}
+    multipart:
+      part-size-bytes: ${OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES:67108864}

@@ -5,6 +5,7 @@ import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.actuate.health.Health;
 import org.springframework.boot.actuate.health.HealthIndicator;
+import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
 import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.stereotype.Component;
 
@@ -13,6 +14,7 @@ import java.net.URI;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
@@ -20,7 +22,7 @@ import java.util.concurrent.TimeUnit;
 public class PipelineReadinessHealthIndicator implements HealthIndicator {
 
     private final KafkaListenerEndpointRegistry listenerRegistry;
-    private final String kafkaBootstrapServers;
+    private final KafkaProperties kafkaProperties;
     private final String lockMode;
     private final String lockJdbcUrl;
     private final String lockUsername;
@@ -30,7 +32,7 @@ public class PipelineReadinessHealthIndicator implements HealthIndicator {
 
     public PipelineReadinessHealthIndicator(
             KafkaListenerEndpointRegistry listenerRegistry,
-            @Value("${spring.kafka.bootstrap-servers}") String kafkaBootstrapServers,
+            KafkaProperties kafkaProperties,
             @Value("${app.execution-lock.mode:POSTGRES}") String lockMode,
             @Value("${app.execution-lock.jdbc-url}") String lockJdbcUrl,
             @Value("${app.execution-lock.username}") String lockUsername,
@@ -38,7 +40,7 @@ public class PipelineReadinessHealthIndicator implements HealthIndicator {
             @Value("${app.object-storage.enabled:false}") boolean objectStorageEnabled,
             @Value("${app.object-storage.endpoint:http://localhost:9000}") String objectStorageEndpoint) {
         this.listenerRegistry = listenerRegistry;
-        this.kafkaBootstrapServers = kafkaBootstrapServers;
+        this.kafkaProperties = kafkaProperties;
         this.lockMode = lockMode;
         this.lockJdbcUrl = lockJdbcUrl;
         this.lockUsername = lockUsername;
@@ -70,10 +72,10 @@ public class PipelineReadinessHealthIndicator implements HealthIndicator {
     }
 
     private void assertKafkaReady() throws Exception {
-        try (AdminClient admin = AdminClient.create(Map.of(
-                AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaBootstrapServers,
-                AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG, 3000,
-                AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG, 3000))) {
+        Map<String, Object> properties = new HashMap<>(kafkaProperties.buildAdminProperties(null));
+        properties.put(AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG, 3000);
+        properties.put(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG, 3000);
+        try (AdminClient admin = AdminClient.create(properties)) {
             admin.describeCluster().clusterId()
                     .get(Duration.ofSeconds(3).toMillis(), TimeUnit.MILLISECONDS);
         }

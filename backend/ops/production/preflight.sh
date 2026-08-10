@@ -34,6 +34,7 @@ fi
 
 required_secrets=(
   postgres-password mongodb-root-password mongodb-app-password mongodb-openhim-password
+  mongodb-gateway-password mongodb-pipeline-password
   mongodb-keyfile rustfs-root-access-key rustfs-root-secret-key rustfs-app-access-key
   rustfs-app-secret-key tls-store-password kafka-keystore-password kafka-key-password
   kafka-truststore-password spark-auth-secret keycloak-db-password
@@ -48,7 +49,8 @@ for secret_name in "${required_secrets[@]}"; do
   [[ -s "${BACKEND_DIR}/secrets/${secret_name}" ]] \
     || fail "secret absent ou vide: secrets/${secret_name}"
 done
-for secret_name in vault-api-role-id vault-api-secret-id rustfs-vault-token \
+for secret_name in vault-api-role-id vault-api-secret-id \
+  vault-source-gateway-role-id vault-source-gateway-secret-id rustfs-vault-token \
   vault-backup-role-id vault-backup-secret-id; do
   [[ -s "${BACKEND_DIR}/secrets/vault-generated/${secret_name}" ]] \
     || fail "secret Vault absent: secrets/vault-generated/${secret_name}"
@@ -63,7 +65,8 @@ grep -Eq '^[[:space:]]*seal[[:space:]]+"' "${BACKEND_DIR}/vault/config/seal.hcl"
   || fail 'aucune stanza seal KMS/HSM active'
 
 certificates=(
-  nginx/nginx.crt api-core/api-core.crt pipeline-consumer/pipeline-consumer.crt
+  nginx/nginx.crt api-core/api-core.crt source-gateway/source-gateway.crt \
+  pipeline-consumer/pipeline-consumer.crt
   postgres/postgres.crt mongodb/mongodb.crt kafka-1/kafka.crt
   rustfs/rustfs.crt keycloak/keycloak.crt vault-renewer/vault-renewer.crt
 )
@@ -80,6 +83,9 @@ docker network inspect "${network_name}" >/dev/null 2>&1 \
 [[ "$(docker network inspect --format '{{.Internal}}' "${network_name}")" == "true" ]] \
   || fail 'le reseau Vault partage doit etre interne'
 
+docker compose --env-file "${ENV_FILE}" \
+  -f "${BACKEND_DIR}/docker-compose.yml" \
+  -f "${BACKEND_DIR}/docker-compose.production.yml" config --quiet
 docker compose --profile bootstrap --env-file "${ENV_FILE}" \
   -f "${BACKEND_DIR}/docker-compose.yml" \
   -f "${BACKEND_DIR}/docker-compose.production.yml" config --quiet

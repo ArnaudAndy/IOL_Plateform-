@@ -24,5 +24,5 @@ public interface TransportPipeline {
     /**
      * @throws Exception toute panne avant la publication; l'ordre sera redelivre
      */
-    void run(TransportOrder order) throws Exception;
+    void run(TransportOrder order, Runnable assertOwnership) throws Exception;
 }

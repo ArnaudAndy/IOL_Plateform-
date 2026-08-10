@@ -17,6 +17,7 @@
 **/dist/
 **/node_modules/
 **/__pycache__/
+*.tsbuildinfo
 *.log
 *.pid
 backend/backups/
@@ -24,4 +25,6 @@ backend/secrets/
 backend/keycloak/generated/
 reports/
 /.scripts/
-/scripts/
+/scripts/*
+!/scripts/validate_contracts.py
+!/scripts/validate_production_security.py

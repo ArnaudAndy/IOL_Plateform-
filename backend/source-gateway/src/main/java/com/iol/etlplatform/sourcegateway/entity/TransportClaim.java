@@ -38,11 +38,18 @@ public class TransportClaim {
     /** Instance detentrice, pour le diagnostic. */
     private String owner;
 
+    /** Jeton renouvele a chaque acquisition: interdit les ecritures d'un ancien detenteur. */
+    private String fencingToken;
+
+    /** Nombre persistant d'acquisitions, y compris apres redemarrage ou rebalance. */
+    private int attempts;
+
     private Status status;
 
     private Instant claimedAt;
     private Instant leaseExpiresAt;
     private Instant completedAt;
+    private Instant failedAt;
 
     private String failureReason;
 
@@ -50,7 +57,9 @@ public class TransportClaim {
         /** Transport en cours par le detenteur. */
         IN_PROGRESS,
         /** Commande publiee: etat terminal, aucune reprise possible. */
-        COMPLETED
+        COMPLETED,
+        /** Nombre maximal de tentatives atteint: diagnostic conserve en DLQ. */
+        FAILED
     }
 
     /** Vrai si le bail a expire et qu'une autre instance peut reprendre. */

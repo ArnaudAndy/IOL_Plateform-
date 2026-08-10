@@ -184,7 +184,7 @@ services:
       start_period: 360s
 
   # ── Source Gateway (lecture des sources et transport) ──────────────────────
-  # Seul service autorise a ouvrir une connexion vers la base d'un client.
+  # Seul service autorise a lire les lignes source pendant une execution.
   # Aucun port publie: son entree metier est le topic des ordres de transport.
   # Le volume d'uploads est monte en LECTURE SEULE: api-core depose et scanne,
   # le gateway ne fait que lire un fichier deja declare sain.
@@ -192,14 +192,12 @@ services:
     build:
       context: ./source-gateway
       dockerfile: Dockerfile
-    container_name: iol-source-gateway
     restart: unless-stopped
     mem_limit: "${SOURCE_GATEWAY_MEMORY_LIMIT:-4g}"
     expose:
       - "8087"
     volumes:
       - iol-upload-data:/data/iol/uploads:ro
-      - iol-gateway-transport:/var/lib/iol/transport
     environment:
       MONGODB_URI:               "mongodb://mongodb:27017/iol_metadata"
       KAFKA_BOOTSTRAP_SERVERS:   "kafka:9092"
@@ -208,14 +206,17 @@ services:
       APP_KAFKA_COMMANDS_HIGH_TOPIC: "iol.pipeline.high"
       APP_KAFKA_COMMANDS_TOPIC:      "iol.pipeline.commands"
       APP_KAFKA_COMMANDS_LOW_TOPIC:  "iol.pipeline.low"
+      APP_KAFKA_STATUS_TOPIC:        "iol.pipeline.status"
       APP_UPLOAD_ROOT:           "/data/iol/uploads"
-      APP_KAFKA_DATA_TEMP_DIR:   "/var/lib/iol/transport"
       APP_TENANCY_DEFAULT_ORGANIZATION_ID: "${DEFAULT_ORGANIZATION_ID:-iol-default}"
       OBJECT_STORAGE_ENABLED:    "${OBJECT_STORAGE_ENABLED:-true}"
       OBJECT_STORAGE_ENDPOINT:   "http://rustfs:9000"
       OBJECT_STORAGE_BUCKET:     "${OBJECT_STORAGE_BUCKET:-iol-source-data}"
       OBJECT_STORAGE_ACCESS_KEY: "${RUSTFS_ACCESS_KEY:-rustfsadmin}"
       OBJECT_STORAGE_SECRET_KEY: "${RUSTFS_SECRET_KEY:-rustfsadmin}"
+      OBJECT_STORAGE_CREATE_BUCKET_IF_MISSING: "true"
+      SPARK_ROW_THRESHOLD:       "${SPARK_ROW_THRESHOLD:-10000000}"
+      SPARK_FILE_SIZE_THRESHOLD_BYTES: "${SPARK_FILE_SIZE_THRESHOLD_BYTES:-2147483648}"
     depends_on:
       kafka:
         condition: service_healthy
@@ -245,6 +246,7 @@ services:
       # scannes et solidaires du tag de version.
       - iol-hop-temp:/tmp/iol                      # fichiers JSON temporaires
     environment:
+      MONGODB_URI:               "mongodb://mongodb:27017/iol_metadata"
       KAFKA_BOOTSTRAP_SERVERS:   "kafka:9092"
       APP_KAFKA_COMMANDS_HIGH_TOPIC: "iol.pipeline.high"
       APP_KAFKA_COMMANDS_TOPIC:     "iol.pipeline.commands"
@@ -300,6 +302,8 @@ services:
       SERVER_PORT:               "8085"
     depends_on:
       kafka:
+        condition: service_healthy
+      mongodb:
         condition: service_healthy
       rustfs:
         condition: service_healthy
@@ -518,9 +522,6 @@ volumes:
   pg_data:
   iol-hop-temp:
   iol-api-transport:
-  # Staging local du gateway, distinct de celui d'api-core: les deux services
-  # ne partagent aucun espace d'ecriture.
-  iol-gateway-transport:
   iol-upload-data:
   iol-quarantine-data:
   clamav-signatures:

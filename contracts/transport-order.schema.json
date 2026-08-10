@@ -10,6 +10,7 @@
     "schemaVersion",
     "organizationId",
     "workflowId",
+    "workflowRevision",
     "execLogId",
     "executionKey",
     "requestedAt"
@@ -21,7 +22,7 @@
     },
     "schemaVersion": {
       "type": "integer",
-      "minimum": 1,
+      "const": 2,
       "description": "Version du contrat. Le gateway refuse une version qu'il ne connait pas plutot que d'interpreter au hasard."
     },
     "organizationId": {
@@ -33,6 +34,11 @@
       "type": "string",
       "minLength": 1,
       "description": "Seule reference metier transportee. Le gateway lit la configuration et resout les credentials a partir d'elle."
+    },
+    "workflowRevision": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Valeur updatedAt observee par api-core lors de la soumission. Le gateway refuse d'executer si la configuration a change dans l'intervalle."
     },
     "execLogId": {
       "type": "string",
@@ -63,9 +69,10 @@
   "examples": [
     {
       "eventType": "TRANSPORT_REQUESTED",
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "organizationId": "iol-default",
       "workflowId": "wf-123",
+      "workflowRevision": "2026-08-07T10:14:52.123Z",
       "execLogId": "exec-456",
       "executionKey": "iol-default:wf-123",
       "requestedAt": "2026-08-07T10:15:00Z",

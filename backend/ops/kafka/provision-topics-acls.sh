@@ -40,6 +40,8 @@ create_topic iol.pipeline.commands 12 604800000
 create_topic iol.pipeline.low 6 604800000
 create_topic iol.pipeline.status 12 604800000
 create_topic iol.pipeline.commands.dlq 3 2592000000
+create_topic iol.transport.requests 12 604800000
+create_topic iol.transport.requests.dlq 3 2592000000
 create_topic iol.outbound.delivery 12 604800000
 create_topic iol.outbound.status 12 604800000
 create_topic iol.outbound.delivery.dlq 3 2592000000
@@ -65,6 +67,7 @@ grant_group_prefix() {
 for topic in iol.pipeline.high iol.pipeline.commands iol.pipeline.low iol.outbound.delivery; do
   grant_topic api-core "${topic}" Write
 done
+grant_topic api-core iol.transport.requests Write
 for topic in iol.pipeline.status iol.outbound.status; do
   grant_topic api-core "${topic}" Read
 done
@@ -78,6 +81,13 @@ for topic in iol.pipeline.status iol.pipeline.commands.dlq; do
 done
 grant_group_prefix pipeline-consumer iol-pipeline-
 
+grant_topic source-gateway iol.transport.requests Read
+grant_group_prefix source-gateway source-gateway-
+for topic in iol.pipeline.high iol.pipeline.commands iol.pipeline.low \
+  iol.pipeline.status iol.transport.requests.dlq; do
+  grant_topic source-gateway "${topic}" Write
+done
+
 for topic in iol.pipeline.high iol.pipeline.commands iol.pipeline.low iol.pipeline.status; do
   grant_topic iol-mediator "${topic}" Write
 done
@@ -89,10 +99,13 @@ for topic in iol.outbound.status iol.outbound.delivery.dlq; do
 done
 grant_group_prefix iol-mediator iol-mediator-
 
-for principal in api-core pipeline-consumer iol-mediator; do
+for principal in api-core source-gateway pipeline-consumer iol-mediator; do
   kafka-acls --bootstrap-server "${BOOTSTRAP_SERVERS}" \
     --command-config "${ADMIN_CONFIG}" --add \
     --allow-principal "User:${principal}" --operation IdempotentWrite --cluster
+  kafka-acls --bootstrap-server "${BOOTSTRAP_SERVERS}" \
+    --command-config "${ADMIN_CONFIG}" --add \
+    --allow-principal "User:${principal}" --operation Describe --cluster
 done
 
 kafka-acls --bootstrap-server "${BOOTSTRAP_SERVERS}" \

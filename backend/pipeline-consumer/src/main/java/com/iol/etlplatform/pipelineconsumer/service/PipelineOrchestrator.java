@@ -19,7 +19,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -27,7 +26,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -89,12 +87,6 @@ public class PipelineOrchestrator {
     private ObjectStorageClient objectStorageClient;
     @Autowired(required = false)
     private RuntimeCredentialClient runtimeCredentialClient;
-    private final ConcurrentHashMap<String, Instant> executedHashes = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, CompletionSnapshot> completedExecutions = new ConcurrentHashMap<>();
-
-    @Value("${orchestrator.idempotence.ttl.seconds:3600}")
-    private long idempotenceTtlSeconds;
-
     // ── Hop ──────────────────────────────────────────────────────────────────
     @Value("${app.hop.home:/opt/hop}")
     private String hopHome;
@@ -250,18 +242,14 @@ public class PipelineOrchestrator {
     // ─────────────────────────────────────────────────────────────────────────
 
     public boolean execute(JsonNode command, String workflowId, String execLogId) {
-        // Idempotence
-        String hash = sha256(command.toString());
-        if (isDuplicate(hash)) {
-            log.info("Exécution dupliquée ignorée (idempotence) — workflowId={}", workflowId);
-            CompletionSnapshot completed = completedExecutions.get(hash);
-            if (completed != null) {
-                publishStatus(command, interopContext(command), execLogId, workflowId,
-                        completed.success(), completed.logOutput(), completed.errorMessage(), completed.durationMs());
-            }
-            return completed == null || completed.success();
-        }
-        executedHashes.put(hash, Instant.now());
+        return execute(command, workflowId, execLogId, ignored -> {});
+    }
+
+    public boolean execute(
+            JsonNode command,
+            String workflowId,
+            String execLogId,
+            CompletionRecorder completionRecorder) {
 
         // Déterminer le mode d'exécution
         ExecutionMode mode = resolveExecutionMode(command);
@@ -275,12 +263,14 @@ public class PipelineOrchestrator {
         Path tempFile = null;
         PreparedCommand preparedCommand = null;
         Instant start = Instant.now();
-        boolean successful = false;
+        PipelineExecutionRegistry.Outcome outcome;
+        JsonNode terminalCommand = command;
         try {
             progress.start();
             progress.stage("PREPARATION");
             // 0. INBOUND/PUSH uniquement : exposer le pivot au moteur dans son format JSON natif.
             preparedCommand = prepareCommandForHop(command, workflowId, execLogId);
+            terminalCommand = preparedCommand.command();
 
             // 1. Écrire le JSON de config dans un fichier temporaire
             tempFile = writeTempMetadata(preparedCommand.command(), workflowId);
@@ -292,19 +282,13 @@ public class PipelineOrchestrator {
                     : runHop(tempFile, workflowId, execLogId, pipelineName, mode, preparedCommand.command(), progress);
 
             long durationMs = Duration.between(start, Instant.now()).toMillis();
-            progress.finish();
-            completedExecutions.put(hash, new CompletionSnapshot(
-                    result.success(), result.logOutput(), result.errorMessage(), durationMs));
-            successful = result.success();
-            publishStatus(preparedCommand.command(), interopContext, execLogId, workflowId, result.success(), result.logOutput(),
-                    result.errorMessage(), durationMs);
+            outcome = new PipelineExecutionRegistry.Outcome(
+                    result.success(), result.logOutput(), result.errorMessage(), durationMs);
 
         } catch (Exception e) {
-            progress.finish();
             log.error("Erreur pipeline '{}': {}", pipelineName, e.getMessage(), e);
-            completedExecutions.put(hash, new CompletionSnapshot(false, "", e.getMessage(),
-                    Duration.between(start, Instant.now()).toMillis()));
-            publishFailure(command, execLogId, workflowId, e.getMessage());
+            outcome = new PipelineExecutionRegistry.Outcome(
+                    false, "", e.getMessage(), Duration.between(start, Instant.now()).toMillis());
         } finally {
             progress.close();
             deleteTempFile(tempFile);
@@ -312,7 +296,31 @@ public class PipelineOrchestrator {
                 preparedCommand.tempFiles().forEach(this::deleteTempFile);
             }
         }
-        return successful;
+
+        // Le resultat devient durable AVANT sa publication finale. Une panne
+        // entre les deux provoque une redelivrance qui republie ce snapshot au
+        // lieu de relancer Hop/Spark.
+        completionRecorder.record(outcome);
+        replayTerminalStatus(terminalCommand, execLogId, workflowId, outcome);
+        return outcome.success();
+    }
+
+    public void replayTerminalStatus(
+            JsonNode command,
+            String execLogId,
+            String workflowId,
+            PipelineExecutionRegistry.Outcome outcome) {
+        if (outcome.success()) {
+            publishStatus(command, interopContext(command), execLogId, workflowId, true,
+                    outcome.logOutput(), outcome.errorMessage(), outcome.durationMs());
+        } else {
+            publishFailure(command, execLogId, workflowId, outcome.errorMessage());
+        }
+    }
+
+    @FunctionalInterface
+    public interface CompletionRecorder {
+        void record(PipelineExecutionRegistry.Outcome outcome);
     }
 
     public void cleanupTransferredObjects(JsonNode command) {
@@ -983,7 +991,8 @@ public class PipelineOrchestrator {
             kafkaTemplate.send(statusTopic, workflowId, payload.toString()).get(30, TimeUnit.SECONDS);
             log.info("Statut publié → topic={} status={}", statusTopic, success ? "SUCCESS" : "FAILED");
         } catch (Exception e) {
-            log.error("Impossible de publier le statut: {}", e.getMessage(), e);
+            throw new TerminalPublicationException(
+                    "Impossible de publier le statut terminal: " + e.getMessage(), e);
         }
     }
 
@@ -1058,10 +1067,11 @@ public class PipelineOrchestrator {
             ObjectNode dlq = context.inbound()
                     ? buildInboundDlq(command, context, execLogId, workflowId, errorMessage)
                     : buildLegacyDlq(execLogId, workflowId, errorMessage);
-            kafkaTemplate.send(dlqTopic, workflowId, dlq.toString());
+            kafkaTemplate.send(dlqTopic, workflowId, dlq.toString()).get(30, TimeUnit.SECONDS);
             log.info("Erreur publiée → DLQ={}", dlqTopic);
         } catch (Exception e) {
-            log.error("Impossible de publier en DLQ: {}", e.getMessage(), e);
+            throw new TerminalPublicationException(
+                    "Impossible de publier l'echec en DLQ: " + e.getMessage(), e);
         }    }
 
     String detectFailedStage(String logOutput, String errorMessage) {
@@ -1219,29 +1229,6 @@ public class PipelineOrchestrator {
         return result;
     }
 
-    private boolean isDuplicate(String hash) {
-        Instant last = executedHashes.get(hash);
-        if (last == null) return false;
-        boolean duplicate = Duration.between(last, Instant.now()).getSeconds() < idempotenceTtlSeconds;
-        if (!duplicate) {
-            executedHashes.remove(hash, last);
-            completedExecutions.remove(hash);
-        }
-        return duplicate;
-    }
-
-    private String sha256(String input) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(input.getBytes(StandardCharsets.UTF_8));
-            StringBuilder sb = new StringBuilder(hash.length * 2);
-            for (byte b : hash) sb.append(String.format("%02x", b));
-            return sb.toString();
-        } catch (Exception e) {
-            return Integer.toString(input.hashCode());
-        }
-    }
-
     private final class ProgressReporter implements AutoCloseable {
         private final JsonNode command;
         private final InteropContext context;
@@ -1330,7 +1317,11 @@ public class PipelineOrchestrator {
     private enum ExecutionMode { LOCAL, SPARK }
 
     private record HopResult(boolean success, String logOutput, String errorMessage) {}
-    private record CompletionSnapshot(boolean success, String logOutput, String errorMessage, long durationMs) {}
+    static final class TerminalPublicationException extends IllegalStateException {
+        TerminalPublicationException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
     record PreparedCommand(JsonNode command, List<Path> tempFiles) {}
     private record InteropContext(
             String direction,

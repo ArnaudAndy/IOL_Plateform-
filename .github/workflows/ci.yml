@@ -116,11 +116,19 @@ jobs:
       - name: Syntaxe GitHub Actions
         run: docker run --rm -v "${PWD}:/repo:ro" -w /repo rhysd/actionlint:1.7.7
       - name: Syntaxe de tous les scripts d exploitation
-        run: find backend/ops backend/vault backend/keycloak -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+        run: find backend -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
       - name: Stack principale
         working-directory: backend
         run: docker compose config --quiet
-      - name: Superposition de production
+      - name: Superposition de production runtime
+        working-directory: backend
+        run: >-
+          docker compose
+          --env-file .env.production.example
+          -f docker-compose.yml
+          -f docker-compose.production.yml
+          config --quiet
+      - name: Superposition de production avec bootstrap
         working-directory: backend
         run: >-
           docker compose
@@ -163,6 +171,8 @@ jobs:
           - {name: clamav-tls, context: backend/stunnel, file: backend/stunnel/Dockerfile}
           - {name: openhim-core, context: backend/openhim/openhim-core-privacy, file: backend/openhim/openhim-core-privacy/Dockerfile}
           - {name: mediator-fhir, context: backend/openhim-mediators, file: backend/openhim-mediators/openhim-mediator-iol-fhir/Dockerfile}
+          - {name: mediator-iso20022, context: backend/openhim-mediators, file: backend/openhim-mediators/openhim-mediator-iol-iso20022/Dockerfile}
+          - {name: mediator-edfi, context: backend/openhim-mediators, file: backend/openhim-mediators/openhim-mediator-iol-edfi/Dockerfile}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -189,6 +199,7 @@ jobs:
           - mongo:8.2
           - nginx:1.29-alpine
           - rustfs/rustfs:1.0.0-beta.12
+          - minio/mc:RELEASE.2025-05-21T01-59-54Z
     steps:
       - name: Scan bloquant HIGH et CRITICAL
         uses: aquasecurity/trivy-action@0.28.0

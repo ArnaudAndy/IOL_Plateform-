@@ -11,6 +11,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.verify;
@@ -145,7 +146,8 @@ public class PipelineOrchestratorTest {
         KafkaEventListenerService listener = new KafkaEventListenerService(
                 Mockito.mock(PipelineOrchestrator.class),
                 Mockito.mock(KafkaDataChunkStore.class),
-                Mockito.mock(DistributedExecutionLockService.class));
+                Mockito.mock(DistributedExecutionLockService.class),
+                Mockito.mock(PipelineExecutionRegistry.class));
         ObjectMapper mapper = new ObjectMapper();
         JsonNode first = mapper.readTree("""
                 {"sources":[{"config":{"target_connection":{"connection_id":"mysql-hospital-b"}}}]}
@@ -173,6 +175,8 @@ public class PipelineOrchestratorTest {
     @SuppressWarnings("unchecked")
     void publishesStatusWhenHopLaunchFails() throws Exception {
         KafkaTemplate<String, String> kafkaTemplate = Mockito.mock(KafkaTemplate.class);
+        Mockito.when(kafkaTemplate.send(Mockito.any(), Mockito.any(), Mockito.any()))
+                .thenReturn(CompletableFuture.completedFuture(null));
         PipelineOrchestrator orchestrator = new PipelineOrchestrator(kafkaTemplate);
 
         // hopHome/hopTempDir non injectés (test unitaire sans Spring) → le lancement Hop
@@ -266,6 +270,8 @@ public class PipelineOrchestratorTest {
     @SuppressWarnings("unchecked")
     void inboundFailurePublishesInteropContextAndNoSqlDlq() throws Exception {
         KafkaTemplate<String, String> kafkaTemplate = Mockito.mock(KafkaTemplate.class);
+        Mockito.when(kafkaTemplate.send(Mockito.any(), Mockito.any(), Mockito.any()))
+                .thenReturn(CompletableFuture.completedFuture(null));
         PipelineOrchestrator orchestrator = new PipelineOrchestrator(kafkaTemplate);
         ReflectionTestUtils.setField(orchestrator, "statusTopic", "status-topic");
         ReflectionTestUtils.setField(orchestrator, "dlqTopic", "dlq-topic");

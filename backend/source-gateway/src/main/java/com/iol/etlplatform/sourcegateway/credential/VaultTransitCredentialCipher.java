@@ -176,5 +176,19 @@ public final class VaultTransitCredentialCipher implements CredentialCipher {
         return PROVIDER;
     }
 
+    @Override
+    public void assertReady() {
+        try {
+            restClient.get()
+                    .uri("/v1/auth/token/lookup-self")
+                    .header("X-Vault-Token", token())
+                    .headers(this::addNamespace)
+                    .retrieve()
+                    .toBodilessEntity();
+        } catch (Exception error) {
+            throw new CredentialCryptoException("Vault Transit n'est pas pret.", error);
+        }
+    }
+
     private record CachedToken(String value, Instant refreshAt) { }
 }

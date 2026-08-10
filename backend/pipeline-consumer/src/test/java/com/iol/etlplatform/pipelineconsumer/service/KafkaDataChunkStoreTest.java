@@ -48,7 +48,8 @@ class KafkaDataChunkStoreTest {
         KafkaDataChunkStore store = new KafkaDataChunkStore();
         ReflectionTestUtils.setField(store, "tempDir", tempDir.toString());
         String transferId = "rows-123";
-        String expected = "patient_id,name\nP001,Alice\nP002,\"Bob, Jr\"\n";
+        String expected = "{\"patient_id\":\"P001\",\"name\":\"Alice\"}\n"
+                + "{\"patient_id\":\"P002\",\"name\":\"Bob, Jr\"}\n";
 
         ObjectNode event = objectMapper.createObjectNode();
         event.put("eventType", "PIPELINE_SOURCE_ROW_BATCH");
@@ -63,11 +64,12 @@ class KafkaDataChunkStoreTest {
         byte[] bytes = expected.getBytes(StandardCharsets.UTF_8);
         ObjectNode manifest = objectMapper.createObjectNode();
         manifest.put("transport", "KAFKA_ROW_BATCH");
+        manifest.put("format", "JSON");
         manifest.put("transferId", transferId);
         manifest.put("batchCount", 1);
         manifest.put("sizeBytes", bytes.length);
         manifest.put("sha256", HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)));
-        manifest.put("fileName", "patients.csv");
+        manifest.put("fileName", "patients.jsonl");
 
         Path materialized = store.materialize(manifest, "exec-rows");
         assertEquals(expected, Files.readString(materialized));

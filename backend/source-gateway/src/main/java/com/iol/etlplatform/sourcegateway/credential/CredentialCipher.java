@@ -19,4 +19,9 @@ public interface CredentialCipher {
     String decrypt(CredentialEnvelope envelope, CredentialContext context);
 
     String provider();
+
+    /** Verifie que le fournisseur peut servir avant d'accepter du trafic. */
+    default void assertReady() {
+        // Le chiffrement local n'a pas de dependance reseau.
+    }
 }

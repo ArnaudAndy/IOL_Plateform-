@@ -14,8 +14,8 @@ Le système est organisé autour de trois plans :
 | Composant | Rôle actuel |
 | --- | --- |
 | Frontend | Console React/Vite pour la configuration et le suivi |
-| api-core | API Spring Boot, orchestration, sécurité, logique métier |
-| source-gateway | Lecture des sources et préparation des données |
+| api-core | Plan de contrôle Spring Boot : configuration, orchestration, sécurité et logique métier |
+| source-gateway | Plan de données : lecture des sources et transport vers Kafka/RustFS |
 | pipeline-consumer | Réception des messages, contrôle d’intégrité et exécution |
 | Nginx | Point d’entrée unique pour l’interface et l’API |
 | Kafka | Transport des messages et commandes |
@@ -30,9 +30,16 @@ Le système est organisé autour de trois plans :
 ## Flux courant
 
 1. L’utilisateur configure une source, une destination et un workflow.
-2. L’API prépare l’exécution.
-3. Les données sont transportées via Kafka ou RustFS selon le contexte.
-4. Le consumer exécute le traitement puis écrit vers la destination finale.
+2. L’API crée l’exécution et publie un ordre minimal dans
+   `iol.transport.requests`. Cet ordre ne contient ni requête SQL, ni URL, ni
+   credential source.
+3. Le `source-gateway` réclame durablement l’ordre, relit le workflow dans
+   MongoDB, vérifie sa révision, ouvre la source puis transporte les lignes via
+   Kafka ou RustFS selon le volume estimé.
+4. Le `pipeline-consumer` réclame durablement la commande, contrôle
+   l’intégrité, exécute le traitement puis écrit vers la destination finale.
+5. Les statuts `TRANSPORT`, `BRONZE`, `SILVER` et `GOLD` alimentent le suivi en
+   temps réel.
 
 ## Limite importante
 
@@ -40,27 +47,35 @@ Le dépôt contient une base d’architecture fonctionnelle, mais pas une topolo
 
 ## Points de structure
 
-- Le backend est le point central de contrôle.
+- `api-core` est le point central de contrôle.
 - Les secrets ne doivent pas être commités dans Git.
-- Les sources ne sont pas directement exposées aux moteurs d’exécution ; l’API reste le seul point d’accès à la source au cours du traitement.
+- `api-core` peut tester une connexion et inspecter des métadonnées pendant la
+  configuration. Il ne lit pas les lignes d'une exécution de workflow.
+- Seul le `source-gateway` ouvre la source pendant le transport. Hop et Spark
+  ne reçoivent qu'un artefact déjà transporté.
 
 ```mermaid
 sequenceDiagram
   participant A as api-core
+  participant G as source-gateway
   participant S as Source JDBC
   participant R as RustFS
   participant K as Kafka
   participant C as pipeline-consumer
   participant P as Spark
 
-  A->>S: SELECT/WITH en lecture seule
+  A->>K: TRANSPORT_REQUESTED (identifiants + revision)
+  K->>G: ordre de transport
+  G->>G: claim Mongo + lecture du workflow
+  G->>S: SELECT/WITH en lecture seule
   loop Parties bornees a 64 Mio
-    S-->>A: lignes JDBC
-    A->>R: partie multipart JSON Lines
+    S-->>G: lignes JDBC
+    G->>R: partie multipart JSON Lines
   end
-  A->>R: finalisation objet
-  A->>K: manifeste bucket/key/taille/SHA-256
+  G->>R: finalisation objet
+  G->>K: manifeste bucket/key/taille/SHA-256
   K->>C: commande
+  C->>C: claim Mongo + heartbeat
   C->>R: telechargement de l'objet
   C->>C: verification SHA-256
   C->>P: artefact partage, aucun acces source
@@ -75,7 +90,7 @@ consumer telecharge l'objet verifie dans ce volume avant `spark-submit`.
 
 - tous les lots et la commande utilisent la meme cle Kafka ;
 - les publications de lots sont attendues avant la commande ;
-- le consumer stocke chaque index de lot de facon idempotente ;
+- le consumer stocke chaque index de lot de facon idempotente dans MongoDB ;
 - un doublon identique est accepte ;
 - un doublon different est refuse ;
 - un lot manquant bloque uniquement cette execution ;
@@ -122,10 +137,12 @@ L'utilisateur configure une intention de transformation, pas un moteur.
 | Composant | Responsabilite |
 | --- | --- |
 | `frontend` | Sources, destination, mappings, Silver, Gold et suivi metier. |
-| `api-core` | Seul acces source, validation SQL, estimation, extraction et transport. |
+| `api-core` | Configuration, inspection bornee des metadonnees, validation, creation de l'execution et publication de l'ordre. |
+| `source-gateway` | Seul acces aux lignes source pendant une execution, estimation et transport. |
 | Kafka | Toutes les donnees normales, commandes, manifestes, statuts et DLQ. |
 | RustFS | Donnees Big Data et repli pour evenement Kafka surdimensionne. |
-| `pipeline-consumer` | Ordre, integrite, verrou, materialisation et lancement. |
+| MongoDB runtime | Claims fences, heartbeats, lots Kafka et resultat terminal persistants. |
+| `pipeline-consumer` | Ordre, integrite, claim persistant, materialisation et lancement. |
 | Hop | Orchestration locale sur artefact transporte. |
 | `moteur_universel.py` | Lecture fichier/JSON Lines et ecriture locale. |
 | `spark_etl.py` | Calcul distribue sur artefact transporte. |
@@ -146,15 +163,20 @@ L'utilisateur configure une intention de transformation, pas un moteur.
 | `APP_KAFKA_ROW_BATCH_MAX_EVENT_BYTES` | 8 Mio | Limite de securite d'un evenement Kafka, pas seuil Big Data. |
 | `APP_KAFKA_DATA_CHUNK_BYTES` | 512 Kio | Taille des morceaux fichier Kafka. |
 | `APP_LOCAL_EXTRACTION_MAX_BYTES` | 1 Gio | Plafond des extractions API temporaires. |
+| `APP_KAFKA_MAX_POLL_INTERVAL_MS` | 7 jours en production | Duree maximale qualifiee d'un transport/pipeline synchrone avant rebalance Kafka. |
+| `HOP_EXECUTION_TIMEOUT_SECONDS` | 24 h en production | Coupe-circuit maximal d'une execution locale. |
+| `SPARK_EXECUTION_TIMEOUT_SECONDS` | 6 jours en production | Coupe-circuit maximal d'une execution distribuee. |
 
 ## Points d'ancrage dans le code
 
-- `SourceLoadEstimatorService.java` : diagnostic automatique.
-- `KafkaPipelineEventService.java` : choix final LOCAL/SPARK.
-- `SourceDataTransportService.java` : JDBC -> Kafka JSON ou RustFS.
-- `ObjectStorageService.java` : multipart streaming et SHA-256.
-- `KafkaDataChunkStore.java` : reconstruction ordonnee et integrite.
-- `PipelineOrchestrator.java` : barriere anti-acces source et lancement.
+- `api-core/.../TransportOrderPublisher.java` : contrat minimal de transport.
+- `source-gateway/.../SourceLoadEstimatorService.java` : diagnostic automatique.
+- `source-gateway/.../SourceDataTransportService.java` : JDBC -> Kafka JSON ou RustFS.
+- `source-gateway/.../ObjectStorageService.java` : multipart streaming et SHA-256.
+- `source-gateway/.../MongoTransportExecutionGuard.java` : lease, fencing et reprise du transport.
+- `pipeline-consumer/.../KafkaDataChunkStore.java` : inbox Mongo, reconstruction ordonnee et integrite.
+- `pipeline-consumer/.../PipelineExecutionRegistry.java` : claim, heartbeat et resultat terminal.
+- `pipeline-consumer/.../PipelineOrchestrator.java` : barriere anti-acces source et lancement.
 - `moteur_universel.py` : JSON Lines local, JDBC source interdit.
 - `spark_etl.py` : fichiers distribues, JDBC source interdit.
 
@@ -232,10 +254,11 @@ sont pas exposes dans l'interface metier.
 
 ## Conclusion
 
-Le systeme choisit automatiquement deux chemins :
+Le systeme choisit automatiquement deux chemins sans exposer le moteur a
+l'utilisateur metier :
 
-- charge normale : `Source -> api-core -> Kafka -> consumer -> Hop -> cible` ;
-- Big Data : `Source -> api-core -> RustFS`, puis
+- charge normale : `api-core(ordre) -> source-gateway -> Kafka -> consumer -> Hop -> cible` ;
+- Big Data : `api-core(ordre) -> source-gateway -> RustFS`, puis
   `Kafka(manifeste) -> consumer -> Spark -> cible`.
 
 Hop et Spark ne connaissent jamais la source. L'utilisateur metier ne connait

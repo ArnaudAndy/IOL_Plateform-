@@ -15,6 +15,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
  * @param schemaVersion  version du contrat; une version inconnue est refusee
  * @param organizationId organisation unique de la plateforme
  * @param workflowId     seule reference metier transportee
+ * @param workflowRevision revision immutable observee au moment de la soumission
  * @param execLogId      journal deja cree par api-core; cle du claim idempotent
  * @param executionKey   cle de partition {organizationId}:{workflowId}
  * @param requestedAt    horodatage UTC de la soumission
@@ -27,6 +28,7 @@ public record TransportOrder(
         Integer schemaVersion,
         String organizationId,
         String workflowId,
+        String workflowRevision,
         String execLogId,
         String executionKey,
         String requestedAt,
@@ -36,7 +38,7 @@ public record TransportOrder(
     public static final String EVENT_TYPE = "TRANSPORT_REQUESTED";
 
     /** Version produite et acceptee par cette implementation. */
-    public static final int SUPPORTED_SCHEMA_VERSION = 1;
+    public static final int SUPPORTED_SCHEMA_VERSION = 2;
 
     /**
      * Verifie qu'un ordre est exploitable avant tout travail.
@@ -56,6 +58,7 @@ public record TransportOrder(
                         + SUPPORTED_SCHEMA_VERSION + ")");
         require(hasText(organizationId), "organizationId est obligatoire");
         require(hasText(workflowId), "workflowId est obligatoire");
+        require(hasText(workflowRevision), "workflowRevision est obligatoire");
         require(hasText(execLogId), "execLogId est obligatoire");
         require(hasText(executionKey), "executionKey est obligatoire");
         require(executionKey.startsWith(organizationId + ":"),

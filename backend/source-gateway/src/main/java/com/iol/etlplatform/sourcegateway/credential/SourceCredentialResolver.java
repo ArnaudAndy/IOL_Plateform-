@@ -52,7 +52,7 @@ public class SourceCredentialResolver {
         this.credentialCipher = credentialCipher;
     }
 
-    /** Charge la connexion puis dechiffre son mot de passe. */
+    /** Charge la connexion sans controle de propriete. */
     public DestinationConnection requireConnection(String connectionId) {
         if (connectionId == null || connectionId.isBlank()) {
             throw new BadRequestException("Identifiant de connexion source absent.");
@@ -63,6 +63,50 @@ public class SourceCredentialResolver {
             throw new BadRequestException("Connexion source introuvable: " + connectionId);
         }
         return connection;
+    }
+
+    /**
+     * Charge une connexion en verifiant qu'elle appartient au proprietaire du
+     * workflow.
+     *
+     * Le gateway s'execute hors de toute session utilisateur: il n'y a pas de
+     * contexte de securite dont deduire l'appelant. Le controle se fait donc sur
+     * le proprietaire porte par le workflow, comme le fait
+     * {@code getEntityByIdForOwner} dans api-core. Sans lui, un workflow pourrait
+     * referencer la connexion d'un autre utilisateur et lire sa base.
+     */
+    public DestinationConnection requireConnectionForOwner(String connectionId, String ownerEmail) {
+        DestinationConnection connection = requireConnection(connectionId);
+        if (ownerEmail == null || !ownerEmail.equals(connection.getCreatedBy())) {
+            throw new BadRequestException(
+                    "Acces refuse a la connexion " + connectionId + " pour ce workflow.");
+        }
+        return connection;
+    }
+
+    /**
+     * Traduit une adresse locale en nom joignable depuis un conteneur.
+     *
+     * Une connexion saisie avec « localhost » designe la machine de
+     * l'utilisateur, pas le conteneur qui execute le transport. Sans cette
+     * traduction, le gateway tenterait de se connecter a lui-meme.
+     */
+    public String resolveRuntimeHost(String host) {
+        if (host == null || host.isBlank()) {
+            return host;
+        }
+        String trimmed = host.trim();
+        boolean local = "localhost".equalsIgnoreCase(trimmed)
+                || "127.0.0.1".equals(trimmed)
+                || "::1".equals(trimmed);
+        if (local && isRunningInContainer()) {
+            return "host.docker.internal";
+        }
+        return trimmed;
+    }
+
+    private boolean isRunningInContainer() {
+        return java.nio.file.Files.exists(java.nio.file.Path.of("/.dockerenv"));
     }
 
     public String resolvePassword(DestinationConnection connection) {

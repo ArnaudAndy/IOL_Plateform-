@@ -62,11 +62,20 @@ public class ObjectStorageService {
     @Value("${app.object-storage.multipart.part-size-bytes:67108864}")
     private long multipartPartSizeBytes;
 
+    @Value("${app.object-storage.create-bucket-if-missing:true}")
+    private boolean createBucketIfMissing;
+
     private final AtomicBoolean bucketReady = new AtomicBoolean(false);
     private volatile S3Client client;
 
     public boolean isEnabled() {
         return enabled;
+    }
+
+    /** Verification non destructive utilisee par la readiness. */
+    public void assertReady() {
+        if (!enabled) throw new IllegalStateException("Le stockage objet requis est desactive.");
+        s3().headBucket(HeadBucketRequest.builder().bucket(bucket).build());
     }
 
     public StoredObject store(Path path, String workflowId, String execLogId, int sourceIndex,
@@ -128,16 +137,24 @@ public class ObjectStorageService {
             try {
                 s3().headBucket(HeadBucketRequest.builder().bucket(bucket).build());
             } catch (NoSuchBucketException e) {
-                s3().createBucket(CreateBucketRequest.builder().bucket(bucket).build());
+                createBucketOrFail();
             } catch (software.amazon.awssdk.services.s3.model.S3Exception e) {
                 if (e.statusCode() == 404) {
-                    s3().createBucket(CreateBucketRequest.builder().bucket(bucket).build());
+                    createBucketOrFail();
                 } else {
                     throw e;
                 }
             }
             bucketReady.set(true);
         }
+    }
+
+    private void createBucketOrFail() {
+        if (!createBucketIfMissing) {
+            throw new IllegalStateException(
+                    "Le bucket RustFS/S3 '" + bucket + "' doit etre provisionne avant le demarrage.");
+        }
+        s3().createBucket(CreateBucketRequest.builder().bucket(bucket).build());
     }
 
     private S3Client s3() {

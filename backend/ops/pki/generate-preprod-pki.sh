@@ -98,6 +98,7 @@ EOF
 
 issue_certificate nginx nginx localhost "${PUBLIC_HOSTNAME}"
 issue_certificate api-core api-core
+issue_certificate source-gateway source-gateway
 issue_certificate pipeline-consumer pipeline-consumer
 issue_certificate iol-mediator iol-mediator
 issue_certificate iol-fhir-mediator iol-fhir-mediator
@@ -154,6 +155,7 @@ runtime_bundle() {
 }
 
 runtime_bundle api-core api-core
+runtime_bundle source-gateway source-gateway
 runtime_bundle pipeline-consumer pipeline-consumer
 runtime_bundle nginx nginx
 runtime_bundle postgres postgres

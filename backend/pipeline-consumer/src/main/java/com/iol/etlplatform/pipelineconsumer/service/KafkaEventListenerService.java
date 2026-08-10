@@ -2,6 +2,7 @@ package com.iol.etlplatform.pipelineconsumer.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -9,6 +10,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Service;
+
+import java.time.Duration;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Consomme les 3 topics de commandes Kafka dans l'ordre de priorité.
@@ -49,17 +53,26 @@ public class KafkaEventListenerService {
     private final PipelineOrchestrator orchestrator;
     private final KafkaDataChunkStore dataChunkStore;
     private final DistributedExecutionLockService executionLockService;
+    private final PipelineExecutionRegistry executionRegistry;
 
     @Value("${app.tenancy.default-organization-id:iol-default}")
     private String defaultOrganizationId = "iol-default";
 
+    @Value("${app.kafka.consumer.retry-backoff-seconds:10}")
+    private long retryBackoffSeconds = 10;
+
+    @Value("${app.kafka.consumer.max-attempts:5}")
+    private int maxAttempts = 5;
+
     public KafkaEventListenerService(
             PipelineOrchestrator orchestrator,
             KafkaDataChunkStore dataChunkStore,
-            DistributedExecutionLockService executionLockService) {
+            DistributedExecutionLockService executionLockService,
+            PipelineExecutionRegistry executionRegistry) {
         this.orchestrator = orchestrator;
         this.dataChunkStore = dataChunkStore;
         this.executionLockService = executionLockService;
+        this.executionRegistry = executionRegistry;
     }
 
     // ── Priorité HIGH : traité en premier ────────────────────────────────────
@@ -110,10 +123,7 @@ public class KafkaEventListenerService {
 
             if ("PIPELINE_SOURCE_DATA_CHUNK".equals(eventType)
                     || "PIPELINE_SOURCE_ROW_BATCH".equals(eventType)) {
-                dataChunkStore.accept(node);
-                ack.acknowledge();
-                log.debug("[{}] Données source acquittées transferId={} eventType={}",
-                        priorityLabel, node.path("transferId").asText(), eventType);
+                acceptDataEvent(node, ack, priorityLabel, workflowId, execLogId, eventType);
                 return;
             }
 
@@ -136,30 +146,150 @@ public class KafkaEventListenerService {
             log.info("[{}] Lancement pipeline — workflowId={} execLogId={}",
                     priorityLabel, workflowId, execLogId);
 
+            if ("unknown".equals(execLogId) || execLogId.isBlank()) {
+                throw new IllegalArgumentException("Commande pipeline sans execLogId.");
+            }
+
+            PipelineExecutionRegistry.Claim claim =
+                    executionRegistry.claim(execLogId, workflowId, record.value());
+            if (claim.state() == PipelineExecutionRegistry.ClaimState.BUSY) {
+                log.info("[{}] Execution encore detenue, redelivraison differee: execLogId={}",
+                        priorityLabel, execLogId);
+                retryLater(ack);
+                return;
+            }
+            if (claim.state() == PipelineExecutionRegistry.ClaimState.SUCCESS
+                    || claim.state() == PipelineExecutionRegistry.ClaimState.FAILED) {
+                orchestrator.replayTerminalStatus(node, execLogId, workflowId, claim.outcome());
+                if (claim.state() == PipelineExecutionRegistry.ClaimState.SUCCESS) {
+                    cleanupTransferredData(node, priorityLabel, workflowId);
+                }
+                ack.acknowledge();
+                log.info("[{}] Resultat terminal rejoue sans reexecution: execLogId={}",
+                        priorityLabel, execLogId);
+                return;
+            }
+
+            executeClaimed(node, ack, priorityLabel, workflowId, execLogId, claim);
+        } catch (Exception e) {
+            log.error("[{}] Erreur workflowId={}: {}", priorityLabel, workflowId, e.getMessage(), e);
+            // Une erreur avant toute reservation est soit un poison de contrat,
+            // soit une panne de l'inbox. Le poison n'avance qu'apres statut+DLQ;
+            // une panne d'infrastructure reste redelivrable.
+            if (e instanceof IllegalArgumentException || e instanceof JsonProcessingException) {
+                try {
+                    orchestrator.publishFailure(node, execLogId, workflowId, e.getMessage());
+                    ack.acknowledge();
+                } catch (Exception publicationFailure) {
+                    retryLater(ack);
+                }
+            } else {
+                retryLater(ack);
+            }
+        }
+    }
+
+    private void executeClaimed(
+            JsonNode node,
+            Acknowledgment ack,
+            String priorityLabel,
+            String workflowId,
+            String execLogId,
+            PipelineExecutionRegistry.Claim claim) {
+        AtomicBoolean terminalRecorded = new AtomicBoolean(false);
+        try (PipelineExecutionRegistry.Lease lease = executionRegistry.heartbeat(claim, execLogId)) {
             String lockKey = executionLockKey(node, workflowId);
             boolean successful;
             try (DistributedExecutionLockService.LockHandle ignored =
                          executionLockService.acquire(lockKey)) {
-                successful = orchestrator.execute(node, workflowId, execLogId);
+                successful = orchestrator.execute(node, workflowId, execLogId, outcome -> {
+                    executionRegistry.complete(execLogId, claim, lease, outcome);
+                    terminalRecorded.set(true);
+                });
             }
 
+            if (successful) cleanupTransferredData(node, priorityLabel, workflowId);
             ack.acknowledge();
-            log.info("[{}] Message acquitté après exécution Hop — workflowId={}", priorityLabel, workflowId);
-            if (successful) {
-                try {
-                    orchestrator.cleanupTransferredObjects(node);
-                } catch (Exception cleanupError) {
-                    log.warn("[{}] Nettoyage RustFS différé pour workflowId={}: {}",
-                            priorityLabel, workflowId, cleanupError.getMessage());
-                }
+            log.info("[{}] Message acquitte apres resultat durable — workflowId={} execLogId={}",
+                    priorityLabel, workflowId, execLogId);
+        } catch (Exception failure) {
+            if (terminalRecorded.get()) {
+                // Hop/Spark ne doit surtout pas repartir: le snapshot terminal
+                // existe deja. La redelivrance ne fera que republier son statut.
+                retryLater(ack);
+                return;
             }
 
-        } catch (Exception e) {
-            log.error("[{}] Erreur workflowId={}: {}", priorityLabel, workflowId, e.getMessage(), e);
-            orchestrator.publishFailure(node, execLogId, workflowId, e.getMessage());
-            // Acquitter même en erreur — l'erreur est publiée en DLQ
-            ack.acknowledge();
+            if (claim.attempt() >= Math.max(1, maxAttempts)) {
+                failClaimPermanently(node, ack, workflowId, execLogId, claim, failure);
+                return;
+            }
+            executionRegistry.release(execLogId, claim, failure);
+            retryLater(ack);
+            log.error("[{}] Execution reprenable execLogId={} tentative={}: {}",
+                    priorityLabel, execLogId, claim.attempt(), failure.getMessage(), failure);
         }
+    }
+
+    private void failClaimPermanently(
+            JsonNode node,
+            Acknowledgment ack,
+            String workflowId,
+            String execLogId,
+            PipelineExecutionRegistry.Claim claim,
+            Exception failure) {
+        try (PipelineExecutionRegistry.Lease lease = executionRegistry.heartbeat(claim, execLogId)) {
+            PipelineExecutionRegistry.Outcome outcome = new PipelineExecutionRegistry.Outcome(
+                    false, "", failure.getMessage(), 0);
+            executionRegistry.complete(execLogId, claim, lease, outcome);
+            orchestrator.replayTerminalStatus(node, execLogId, workflowId, outcome);
+            ack.acknowledge();
+        } catch (Exception terminalFailure) {
+            executionRegistry.release(execLogId, claim, terminalFailure);
+            retryLater(ack);
+        }
+    }
+
+    private void acceptDataEvent(
+            JsonNode node,
+            Acknowledgment ack,
+            String priorityLabel,
+            String workflowId,
+            String execLogId,
+            String eventType) {
+        try {
+            dataChunkStore.accept(node);
+            ack.acknowledge();
+            log.debug("[{}] Donnees source durablement acquittees transferId={} eventType={}",
+                    priorityLabel, node.path("transferId").asText(), eventType);
+        } catch (IllegalArgumentException | IllegalStateException poison) {
+            try {
+                orchestrator.publishFailure(node, execLogId, workflowId, poison.getMessage());
+                ack.acknowledge();
+            } catch (Exception publicationFailure) {
+                retryLater(ack);
+            }
+        } catch (Exception infrastructureFailure) {
+            log.error("Inbox Kafka indisponible pour transferId={}: {}",
+                    node.path("transferId").asText(), infrastructureFailure.getMessage());
+            retryLater(ack);
+        }
+    }
+
+    private void cleanupTransferredData(JsonNode command, String priorityLabel, String workflowId) {
+        try {
+            dataChunkStore.cleanup(command);
+            orchestrator.cleanupTransferredObjects(command);
+        } catch (Exception cleanupError) {
+            // Les lots Mongo ont un TTL et RustFS son nettoyage differe: une
+            // panne de maintenance ne doit jamais relancer une destination deja ecrite.
+            log.warn("[{}] Nettoyage differe pour workflowId={}: {}",
+                    priorityLabel, workflowId, cleanupError.getMessage());
+        }
+    }
+
+    private void retryLater(Acknowledgment ack) {
+        ack.nack(Duration.ofSeconds(Math.max(1, retryBackoffSeconds)));
     }
 
     String executionLockKey(JsonNode command, String workflowId) {

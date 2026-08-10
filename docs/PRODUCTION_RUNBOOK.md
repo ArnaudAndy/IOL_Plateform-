@@ -16,9 +16,37 @@ La plateforme est donc opérationnelle pour des usages de préproduction et d’
 
 Avant toute mise en service :
 1. préparer un environnement Linux/Windows avec Docker Compose fonctionnel ;
-2. fournir les secrets nécessaires via variables d’environnement ou stockage sécurisé ;
+2. générer les secrets de fichiers avec `scripts/generate-production-secrets.sh`,
+   puis provisionner les identités Vault avec
+   `scripts/bootstrap-production-vault.sh` ;
 3. vérifier que le frontend est construit avant d’exposer l’interface ;
-4. vérifier la connectivité entre les services internes.
+4. générer la PKI avec `scripts/generate-production-pki.sh` et vérifier la
+   connectivité mTLS entre les services internes ;
+5. exécuter le preflight avant toute création de conteneur :
+   `scripts/preflight-production.sh`.
+
+### Premier bootstrap Keycloak
+
+Le service `keycloak-bootstrap` est volontairement place dans le profil
+`bootstrap`. Il configure les clients et roles, teste SMTP, cree le premier
+administrateur avec un mot de passe temporaire, puis supprime l'administrateur
+master de bootstrap. Il ne doit donc pas etre rejoue automatiquement a chaque
+release.
+
+Pour la premiere installation uniquement :
+
+```bash
+cd backend
+docker compose --env-file .env.production \
+  -f docker-compose.yml -f docker-compose.production.yml \
+  --profile bootstrap up --abort-on-container-exit keycloak-bootstrap
+docker compose --env-file .env.production \
+  -f docker-compose.yml -f docker-compose.production.yml up -d
+```
+
+Lors des releases suivantes, executer uniquement la seconde commande. Les
+applications dependent de la readiness Keycloak et leurs propres readiness
+verifient ensuite l'obtention d'un jeton avec leurs identites de service.
 
 ## 3. Démarrage de base
 
@@ -138,17 +166,35 @@ son propre plan de retour ; aucun rollback binaire ne peut la rendre reversible.
 ### Hopital, Oracle vers lakehouse
 
 L'administrateur cree une connexion Oracle. Le mot de passe est chiffre par
-Vault et seul le ciphertext va dans MongoDB. Au lancement, `api-core` lit la
-source par fenetres, transporte les lignes dans Kafka, puis le consumer lance
-Hop sur le staging JSONL. Une panne consumer provoque une reprise idempotente ;
-Hop ne se reconnecte jamais a Oracle.
+Vault et seul le ciphertext va dans MongoDB. Au lancement, `api-core` publie un
+ordre minimal. Le `source-gateway` relit le workflow, verifie sa revision, lit
+Oracle par fenetres et transporte les lignes dans Kafka. Le consumer lance Hop
+sur le staging JSONL. Une panne du gateway ou du consumer provoque une reprise
+avec claim persistant, heartbeat et fencing ; Hop ne se reconnecte jamais a
+Oracle.
 
 ### Assurance, 2,4 To
 
-L'estimation depasse les seuils. Sans choix affiche a l'utilisateur, `api-core`
-envoie la source en multipart vers RustFS, publie le manifeste dans Kafka et le
-consumer selectionne Spark. Apres succes, l'objet technique est supprime. En
-cas d'echec, il reste 72 heures par defaut pour diagnostic avant purge.
+L'estimation depasse les seuils. Sans choix affiche a l'utilisateur, le
+`source-gateway` envoie la source en multipart vers RustFS, publie le manifeste
+dans Kafka et le consumer selectionne Spark. Apres succes, l'objet technique
+est supprime. En cas d'echec, il reste 72 heures par defaut pour diagnostic
+avant purge.
+
+### Demarrage securise de RustFS
+
+`rustfs-init` est une etape bloquante du Compose de production. Elle cree le
+bucket s'il est absent, installe une politique limitee au prefixe
+`source-data/*`, provisionne l'identite applicative et verifie son acces. Les
+services `api-core`, `source-gateway` et `pipeline-consumer` ne demarrent
+qu'apres son succes. En profil `prod`, aucun service applicatif n'a le droit de
+creer lui-meme le bucket.
+
+Les mots de passe MongoDB de runtime sont separes :
+`mongodb-gateway-password` ne permet d'ecrire que dans `transport_claims`, et
+`mongodb-pipeline-password` uniquement dans `pipeline_execution_claims` et
+`pipeline_data_chunks`. Les deux services ont egalement leurs propres
+certificats, ACL Kafka et identites Vault.
 
 ### Echange ISO 20022
 

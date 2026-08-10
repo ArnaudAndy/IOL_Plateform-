@@ -20,7 +20,7 @@ import org.springframework.kafka.listener.ContainerProperties;
  *
  * Deux choix portent l'atomicite :
  *
- *  - {@code AckMode.MANUAL} : l'offset n'avance que lorsque le listener
+ *  - {@code AckMode.MANUAL_IMMEDIATE} : l'offset n'avance que lorsque le listener
  *    acquitte, c'est-a-dire apres la publication de la commande. Un crash en
  *    cours de transport laisse donc l'ordre redelivrable.
  *
@@ -69,7 +69,7 @@ public class KafkaConsumerConfig {
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(transportOrderConsumerFactory);
         factory.setConcurrency(concurrency);
-        factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL);
+        factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
         return factory;
     }
 }

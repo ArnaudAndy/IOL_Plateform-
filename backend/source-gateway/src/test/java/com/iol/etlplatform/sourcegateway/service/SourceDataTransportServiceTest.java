@@ -32,23 +32,30 @@ import static org.mockito.Mockito.when;
 class SourceDataTransportServiceTest {
 
     @Test
-    void rejectsApiCsvThatExceedsLocalExtractionLimit(@TempDir Path tempDir) throws Exception {
+    void streamsApiRowsThroughKafkaAsJsonWithoutCsv(@TempDir Path tempDir) throws Exception {
         UploadedFileLocator uploads = uploadedFileService(tempDir);
+        KafkaTemplate<String, String> kafka = mock(KafkaTemplate.class);
+        when(kafka.send(anyString(), anyString(), anyString()))
+                .thenReturn(CompletableFuture.completedFuture(null));
         ObjectProvider<KafkaTemplate<String, String>> provider = mock(ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(kafka);
         ApiSourceClient apiSourceClient = mock(ApiSourceClient.class);
-        when(apiSourceClient.writeCsv(org.mockito.ArgumentMatchers.anyMap(), org.mockito.ArgumentMatchers.any(Path.class)))
+        when(apiSourceClient.streamRows(
+                org.mockito.ArgumentMatchers.anyMap(),
+                org.mockito.ArgumentMatchers.any(ApiSourceClient.RowConsumer.class)))
                 .thenAnswer(invocation -> {
-                    Files.writeString(invocation.getArgument(1), "id,name\n1,Alice\n2,Bob\n");
+                    ApiSourceClient.RowConsumer consumer = invocation.getArgument(1);
+                    ObjectMapper mapper = new ObjectMapper();
+                    consumer.accept(mapper.readTree("{\"id\":1,\"name\":\"Alice\"}"));
+                    consumer.accept(mapper.readTree("{\"id\":2,\"name\":\"Bob\"}"));
                     return 2L;
                 });
         SourceDataTransportService service = new SourceDataTransportService(
                 new ObjectMapper(), provider, uploads, apiSourceClient, mock(ObjectStorageService.class),
                 new SourceConnectionLimiter(8, 5));
         ReflectionTestUtils.setField(service, "enabled", true);
-        ReflectionTestUtils.setField(service, "tempDir", tempDir.resolve("transport").toString());
-        ReflectionTestUtils.setField(service, "maxLocalExtractionBytes", 10L);
-        ReflectionTestUtils.setField(service, "minFreeDiskBytes", 0L);
-        ReflectionTestUtils.setField(service, "staleTempFileAgeSeconds", 3600L);
+        ReflectionTestUtils.setField(service, "rowBatchRows", 100);
+        ReflectionTestUtils.setField(service, "maxRowBatchEventBytes", 1024 * 1024);
 
         Map<String, Object> source = new LinkedHashMap<>();
         source.put("source_name", "API");
@@ -58,8 +65,16 @@ class SourceDataTransportServiceTest {
         command.put("executionMode", "LOCAL");
         command.put("sources", new ArrayList<>(List.of(source)));
 
-        assertThrows(com.iol.etlplatform.sourcegateway.exception.BadRequestException.class, () -> service.publishSourceData(
-                "iol.pipeline.commands", "wf-1", "wf-1", "exec-1", command));
+        List<Map<String, Object>> manifest = service.publishSourceData(
+                "iol.pipeline.commands", "wf-1", "wf-1", "exec-1", command);
+
+        assertEquals("KAFKA_ROW_BATCH", manifest.get(0).get("transport"));
+        assertEquals("JSON", manifest.get(0).get("format"));
+        assertEquals("JSON", source.get("source_name"));
+        ArgumentCaptor<String> event = ArgumentCaptor.forClass(String.class);
+        verify(kafka).send(anyString(), anyString(), event.capture());
+        assertEquals("JSON", new ObjectMapper().readTree(event.getValue()).path("format").asText());
+        assertTrue(!event.getValue().toLowerCase().contains("csv"));
     }
 
     @Test
@@ -83,7 +98,6 @@ class SourceDataTransportServiceTest {
                 new SourceConnectionLimiter(8, 5));
         ReflectionTestUtils.setField(service, "enabled", true);
         ReflectionTestUtils.setField(service, "chunkBytes", 65_536);
-        ReflectionTestUtils.setField(service, "tempDir", tempDir.resolve("transport").toString());
 
         Map<String, Object> config = new LinkedHashMap<>();
         config.put("upload_id", uploaded.uploadId());
@@ -120,8 +134,6 @@ class SourceDataTransportServiceTest {
                 new ObjectMapper(), provider, uploads, mock(ApiSourceClient.class), objectStorage,
                 new SourceConnectionLimiter(8, 5));
         ReflectionTestUtils.setField(service, "enabled", true);
-        ReflectionTestUtils.setField(service, "tempDir", tempDir.resolve("transport").toString());
-        ReflectionTestUtils.setField(service, "minFreeDiskBytes", 0L);
         Path database = createJdbcFixture(tempDir);
 
         Map<String, Object> sourceConfig = new LinkedHashMap<>();

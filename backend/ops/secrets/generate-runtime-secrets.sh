@@ -29,6 +29,8 @@ create_secret postgres-password
 create_secret mongodb-root-password
 create_secret mongodb-app-password
 create_secret mongodb-openhim-password
+create_secret mongodb-gateway-password hex
+create_secret mongodb-pipeline-password hex
 create_secret rustfs-root-access-key hex
 create_secret rustfs-root-secret-key
 create_secret rustfs-app-access-key hex

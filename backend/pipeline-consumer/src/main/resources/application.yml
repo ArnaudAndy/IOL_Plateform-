@@ -21,7 +21,7 @@ spring:
       max-partition-fetch-bytes: 10485760
       fetch-max-bytes: 10485760
       max-poll-records: 1
-      max-poll-interval-ms: 3600000
+      max-poll-interval-ms: ${APP_KAFKA_MAX_POLL_INTERVAL_MS:3600000}
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
@@ -30,9 +30,14 @@ spring:
     listener:
       missing-topics-fatal: false
       ack-mode: manual
+  data:
+    mongodb:
+      uri: ${MONGODB_URI:mongodb://localhost:27017/iol_metadata?serverSelectionTimeoutMS=3000&connectTimeoutMS=3000}
 
 app:
   kafka:
+    data-staging:
+      retention-hours: ${APP_KAFKA_DATA_STAGING_RETENTION_HOURS:168}
     topics:
       commands:
         high:     ${APP_KAFKA_COMMANDS_HIGH_TOPIC:iol.pipeline.high}
@@ -43,6 +48,8 @@ app:
     consumer:
       group: ${KAFKA_CONSUMER_GROUP:iol-pipeline-consumer}
       concurrency: ${APP_KAFKA_CONSUMER_CONCURRENCY:3}
+      retry-backoff-seconds: ${APP_KAFKA_RETRY_BACKOFF_SECONDS:10}
+      max-attempts: ${APP_KAFKA_MAX_ATTEMPTS:5}
     status:
       heartbeat:
         seconds: ${APP_KAFKA_STATUS_HEARTBEAT_SECONDS:5}
@@ -66,6 +73,10 @@ app:
     password: ${EXECUTION_LOCK_PASSWORD:etl_password}
     acquire-timeout-seconds: ${EXECUTION_LOCK_ACQUIRE_TIMEOUT_SECONDS:900}
     poll-interval-millis: ${EXECUTION_LOCK_POLL_INTERVAL_MILLIS:500}
+
+  execution-registry:
+    lease-seconds: ${EXECUTION_REGISTRY_LEASE_SECONDS:7200}
+    heartbeat-seconds: ${EXECUTION_REGISTRY_HEARTBEAT_SECONDS:30}
 
   hop:
     # run.config.local / run.config.spark : noms des run configurations Hop
@@ -151,7 +162,7 @@ management:
         add-additional-paths: true
       group:
         readiness:
-          include: readinessState,pipelineReadiness
+          include: readinessState,mongo,pipelineReadiness
   health:
     livenessstate:
       enabled: true

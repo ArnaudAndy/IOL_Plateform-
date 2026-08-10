@@ -11,7 +11,6 @@ import org.springframework.stereotype.Service;
 
 import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
-import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -25,7 +24,6 @@ import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.Statement;
 import java.time.Instant;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HexFormat;
@@ -37,7 +35,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Moves source rows before a pipeline command becomes executable.
@@ -68,9 +65,6 @@ public class SourceDataTransportService {
 
     @Value("${app.kafka.data-transport.chunk-bytes:524288}")
     private int chunkBytes;
-
-    @Value("${app.kafka.data-transport.temp-dir:${java.io.tmpdir}/iol-api-transport}")
-    private String tempDir;
 
     @Value("${app.kafka.data-transport.row-batch-rows:500}")
     private int rowBatchRows;
@@ -107,17 +101,6 @@ public class SourceDataTransportService {
     @Value("${app.interop.max-ndjson-line-bytes:134217728}")
     private int maxInboundNdjsonLineBytes;
 
-    @Value("${app.kafka.data-transport.max-local-extraction-bytes:1073741824}")
-    private long maxLocalExtractionBytes;
-
-    @Value("${app.kafka.data-transport.min-free-disk-bytes:536870912}")
-    private long minFreeDiskBytes;
-
-    @Value("${app.kafka.data-transport.stale-temp-file-age-seconds:86400}")
-    private long staleTempFileAgeSeconds;
-
-    private final AtomicLong lastTempCleanupMs = new AtomicLong(0L);
-
     @SuppressWarnings("unchecked")
     public List<Map<String, Object>> publishSourceData(
             String topic,
@@ -150,6 +133,30 @@ public class SourceDataTransportService {
                 continue;
             }
             Map<String, Object> config = map(source.get("config"));
+            if ("API".equals(protocol)) {
+                Map<String, Object> item;
+                if (bigData) {
+                    if (!objectStorageService.isEnabled()) {
+                        throw new BadRequestException(
+                                "RustFS doit etre disponible pour transporter une source API Big Data.");
+                    }
+                    item = publishApiObjectReference(workflowId, execLogId, index, config);
+                } else {
+                    try {
+                        item = publishApiRowBatches(
+                                topic, kafkaKey, workflowId, execLogId, index, config);
+                    } catch (KafkaRowTooLargeException oversized) {
+                        if (!objectStorageService.isEnabled()) {
+                            throw new BadRequestException(
+                                    "Une ligne API depasse la capacite Kafka et RustFS est indisponible.");
+                        }
+                        item = publishApiObjectReference(workflowId, execLogId, index, config);
+                    }
+                }
+                manifest.add(item);
+                rewriteSourceForTransport(source, config, "JSON", string(item.get("fileName")), item);
+                continue;
+            }
             if (JDBC_PROTOCOLS.contains(protocol)) {
                 Map<String, Object> item;
                 if (bigData) {
@@ -778,6 +785,83 @@ public class SourceDataTransportService {
         return manifest;
     }
 
+    /** Transporte les objets d'une API page par page, directement vers Kafka. */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> publishApiRowBatches(
+            String topic,
+            String key,
+            String workflowId,
+            String execLogId,
+            int sourceIndex,
+            Map<String, Object> config) {
+        KafkaTemplate<String, String> kafka = kafkaTemplateProvider.getIfAvailable();
+        if (kafka == null) throw new IllegalStateException("KafkaTemplate indisponible pour les lots API.");
+        int maxRows = Math.max(10, Math.min(rowBatchRows, 2_000));
+        String transferId = UUID.randomUUID().toString();
+        MessageDigest digest;
+        try { digest = MessageDigest.getInstance("SHA-256"); }
+        catch (Exception e) { throw new IllegalStateException(e); }
+
+        List<List<Object>> batch = new ArrayList<>(maxRows);
+        final List<String>[] headersRef = new List[]{List.of()};
+        final long[] counters = new long[]{0, 0, 0};
+        SendWindow window = new SendWindow(kafkaMaxInFlightBatches);
+        try {
+            apiSourceClient.streamRows(apiConfig(config), row -> {
+                List<String> currentHeaders = new ArrayList<>();
+                row.fieldNames().forEachRemaining(currentHeaders::add);
+                if (headersRef[0].isEmpty()) {
+                    headersRef[0] = List.copyOf(currentHeaders);
+                } else if (currentHeaders.stream().anyMatch(field -> !headersRef[0].contains(field))) {
+                    throw new BadRequestException(
+                            "Le schema de la reponse API change pendant la pagination: " + currentHeaders);
+                }
+
+                List<Object> values = new ArrayList<>(headersRef[0].size());
+                for (String header : headersRef[0]) {
+                    com.fasterxml.jackson.databind.JsonNode value = row.get(header);
+                    values.add(value == null || value.isNull()
+                            ? null : objectMapper.convertValue(value, Object.class));
+                }
+                byte[] canonical = canonicalJsonRow(headersRef[0], values);
+                digest.update(canonical);
+                counters[1] += canonical.length;
+                counters[2]++;
+                batch.add(values);
+                if (batch.size() >= maxRows) {
+                    counters[0] += sendRowBatch(
+                            kafka, topic, key, workflowId, execLogId, transferId,
+                            sourceIndex, (int) counters[0], headersRef[0], new ArrayList<>(batch),
+                            "api-source-" + sourceIndex + ".jsonl", window);
+                    batch.clear();
+                }
+            });
+            if (!batch.isEmpty()) {
+                counters[0] += sendRowBatch(
+                        kafka, topic, key, workflowId, execLogId, transferId,
+                        sourceIndex, (int) counters[0], headersRef[0], new ArrayList<>(batch),
+                        "api-source-" + sourceIndex + ".jsonl", window);
+            }
+            window.awaitAll();
+        } catch (Exception error) {
+            if (error instanceof BadRequestException badRequest) throw badRequest;
+            if (error instanceof KafkaRowTooLargeException oversized) throw oversized;
+            throw new BadRequestException("Transport API vers Kafka impossible: " + rootMessage(error));
+        }
+
+        Map<String, Object> manifest = new LinkedHashMap<>();
+        manifest.put("transport", "KAFKA_ROW_BATCH");
+        manifest.put("transferId", transferId);
+        manifest.put("sourceIndex", sourceIndex);
+        manifest.put("batchCount", (int) counters[0]);
+        manifest.put("rowCount", counters[2]);
+        manifest.put("sizeBytes", counters[1]);
+        manifest.put("sha256", HexFormat.of().formatHex(digest.digest()));
+        manifest.put("format", "JSON");
+        manifest.put("fileName", "api-source-" + sourceIndex + ".jsonl");
+        return manifest;
+    }
+
     private int sendRowBatch(
             KafkaTemplate<String, String> kafka,
             String topic,
@@ -899,6 +983,32 @@ public class SourceDataTransportService {
                 output -> streamJdbcRows(protocol, config,
                         (headers, values) -> output.write(canonicalJsonRow(headers, values))));
         return objectManifest(stored, sourceIndex, "JSON", fileName);
+    }
+
+    /** Les API Big Data sont streamees vers S3/RustFS sans fichier intermediaire. */
+    private Map<String, Object> publishApiObjectReference(
+            String workflowId,
+            String execLogId,
+            int sourceIndex,
+            Map<String, Object> config) {
+        String fileName = "api-source-" + sourceIndex + ".jsonl";
+        ObjectStorageService.StoredObject stored = objectStorageService.storeStreaming(
+                workflowId,
+                execLogId,
+                sourceIndex,
+                fileName,
+                contentType("JSON"),
+                output -> apiSourceClient.streamRows(apiConfig(config), row -> {
+                    byte[] json = objectMapper.writeValueAsBytes(row);
+                    output.write(json);
+                    output.write('\n');
+                }));
+        return objectManifest(stored, sourceIndex, "JSON", fileName);
+    }
+
+    private Map<String, Object> apiConfig(Map<String, Object> config) {
+        Map<String, Object> nested = map(config.get("source_config"));
+        return nested.isEmpty() ? config : nested;
     }
 
     private void streamJdbcRows(
@@ -1048,10 +1158,6 @@ public class SourceDataTransportService {
     }
 
     private PreparedData prepareSourceData(String protocol, Map<String, Object> config, String execLogId, int index) {
-        if ("API".equals(protocol)) {
-            return extractApiToCsv(config, execLogId, index);
-        }
-
         String uploadId = string(config.get("upload_id"));
         Path path = !uploadId.isBlank()
                 ? uploadedFileLocator.resolve(uploadId)
@@ -1061,101 +1167,6 @@ public class SourceDataTransportService {
         }
         String format = inferFileFormat(protocol, path);
         return new PreparedData(path, format, path.getFileName().toString(), false);
-    }
-
-    private PreparedData extractApiToCsv(Map<String, Object> config, String execLogId, int index) {
-        Path output;
-        try {
-            Path root = prepareTempRoot();
-            output = createSecureTempFile(root, "iol_api_" + safe(execLogId) + "_" + index + "_", ".csv");
-        } catch (Exception e) {
-            throw new BadRequestException("Impossible de créer le fichier temporaire API: " + e.getMessage());
-        }
-        try {
-            Map<String, Object> nested = map(config.get("source_config"));
-            long rows = apiSourceClient.writeCsv(nested.isEmpty() ? config : nested, output);
-            enforceExtractionSize(output);
-            log.info("Extraction API préparée: workflowExec={} source={} rows={} file={}", execLogId, index, rows, output);
-            return new PreparedData(output, "CSV", "api-source-" + index + ".csv", true);
-        } catch (Exception e) {
-            try { Files.deleteIfExists(output); } catch (Exception ignored) { }
-            if (e instanceof BadRequestException badRequest) throw badRequest;
-            throw new BadRequestException("Extraction de la source API impossible: " + rootMessage(e));
-        }
-    }
-
-    private Path prepareTempRoot() throws Exception {
-        Path root = Path.of(tempDir).toAbsolutePath().normalize();
-        Files.createDirectories(root);
-        restrictPermissions(root);
-        ensureFreeDisk(root, 0L);
-        cleanupStaleTempFiles(root);
-        return root;
-    }
-
-    private Path createSecureTempFile(Path root, String prefix, String suffix) throws Exception {
-        Path file = Files.createTempFile(root, prefix, suffix);
-        restrictPermissions(file);
-        return file;
-    }
-
-    private void enforceExtractionSize(Path path) throws Exception {
-        long size = Files.size(path);
-        if (maxLocalExtractionBytes > 0 && size > maxLocalExtractionBytes) {
-            throw new IOException("Extraction locale trop volumineuse (" + size + " octets, plafond "
-                    + maxLocalExtractionBytes + "). Le traitement distribue doit etre utilise.");
-        }
-    }
-
-    private void ensureFreeDisk(Path root, long nextWriteBytes) throws Exception {
-        if (minFreeDiskBytes <= 0) return;
-        long usable = Files.getFileStore(root).getUsableSpace();
-        if (usable - nextWriteBytes < minFreeDiskBytes) {
-            throw new IOException("Espace disque temporaire insuffisant: " + usable
-                    + " octets disponibles, reserve minimale " + minFreeDiskBytes + ".");
-        }
-    }
-
-    private void cleanupStaleTempFiles(Path root) {
-        long now = System.currentTimeMillis();
-        long previous = lastTempCleanupMs.get();
-        if (now - previous < TimeUnit.HOURS.toMillis(1) || !lastTempCleanupMs.compareAndSet(previous, now)) return;
-        Instant cutoff = Instant.now().minus(Duration.ofSeconds(Math.max(60L, staleTempFileAgeSeconds)));
-        try (var files = Files.list(root)) {
-            files.filter(Files::isRegularFile)
-                    .filter(path -> path.getFileName().toString().startsWith("iol_"))
-                    .filter(path -> {
-                        try {
-                            return Files.getLastModifiedTime(path).toInstant().isBefore(cutoff);
-                        } catch (Exception ignored) {
-                            return false;
-                        }
-                    })
-                    .forEach(path -> {
-                        try {
-                            Files.deleteIfExists(path);
-                            log.info("Fichier temporaire abandonne supprime: {}", path);
-                        } catch (Exception error) {
-                            log.warn("Nettoyage du fichier temporaire {} impossible: {}", path, error.getMessage());
-                        }
-                    });
-        } catch (Exception error) {
-            log.warn("Nettoyage du repertoire temporaire {} impossible: {}", root, error.getMessage());
-        }
-    }
-
-    private void restrictPermissions(Path path) {
-        try {
-            java.io.File file = path.toFile();
-            file.setReadable(false, false);
-            file.setWritable(false, false);
-            file.setExecutable(false, false);
-            file.setReadable(true, true);
-            file.setWritable(true, true);
-            if (Files.isDirectory(path)) file.setExecutable(true, true);
-        } catch (Exception error) {
-            log.debug("Permissions restreintes non appliquees a {}: {}", path, error.getMessage());
-        }
     }
 
     private String rootMessage(Throwable error) {

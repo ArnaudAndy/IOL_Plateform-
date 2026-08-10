@@ -6,7 +6,7 @@ import com.iol.etlplatform.entity.enums.ExecutionStatus;
 import com.iol.etlplatform.exception.ConflictException;
 import com.iol.etlplatform.exception.ResourceNotFoundException;
 import com.iol.etlplatform.exception.BadRequestException;
-import com.iol.etlplatform.kafka.KafkaPipelineEventService;
+import com.iol.etlplatform.kafka.TransportOrderPublisher;
 import com.iol.etlplatform.repository.ExecutionLogRepository;
 import com.iol.etlplatform.repository.WorkflowConfigRepository;
 import lombok.RequiredArgsConstructor;
@@ -15,7 +15,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.time.Instant;
@@ -28,9 +27,8 @@ import java.util.concurrent.RejectedExecutionException;
  * Rôle de api-core dans l'exécution d'un pipeline :
  *
  *   1. Enregistre un log RUNNING dans MongoDB (traçabilité immédiate)
- *   2. Extrait, transporte puis publie la commande — sur un pool BORNÉ et
- *      SÉPARÉ des threads HTTP
- *   3. C'est tout — Apache Hop (via pipeline-consumer) fait le reste
+ *   2. Publie un ordre minimal vers le source-gateway, hors du thread HTTP
+ *   3. C'est tout — le gateway transporte, puis le consumer execute
  *
  * Le statut SUCCESS/FAILED est mis à jour par le pipeline-consumer
  * via le topic iol.pipeline.status → KafkaStatusListenerService.
@@ -38,9 +36,9 @@ import java.util.concurrent.RejectedExecutionException;
  * ─────────────────────────────────────────────────────────────────────────
  *  POURQUOI LA SOUMISSION EST ASYNCHRONE
  * ─────────────────────────────────────────────────────────────────────────
- *  Le transport des données source tient son thread pendant toute la durée de
- *  l'extraction — plusieurs minutes sur un volume important. Tant qu'il était
- *  exécuté en ligne sur le thread HTTP :
+ *  L'extraction peut durer plusieurs minutes. api-core ne l'execute plus et ne
+ *  possede plus les credentials source au moment du lancement : il publie un
+ *  ordre contenant seulement les identifiants metier necessaires au gateway.
  *
  *   - Nginx coupait `/api/` à 120 s, donc l'utilisateur recevait un 504 alors
  *     que le transport se poursuivait et que le workflow s'exécutait vraiment ;
@@ -64,7 +62,7 @@ public class OrchestrationService {
 
     private final WorkflowConfigRepository workflowConfigRepository;
     private final ExecutionLogRepository executionLogRepository;
-    private final KafkaPipelineEventService kafkaPipelineEventService;
+    private final TransportOrderPublisher transportOrderPublisher;
 
     @Qualifier("pipelineExecutionExecutor")
     private final Executor pipelineExecutionExecutor;
@@ -88,6 +86,7 @@ public class OrchestrationService {
         assertCanRun(workflow);
         assertNoActiveExecution(workflow);
 
+        String triggeredBy = currentTrigger(workflow);
         ExecutionLog execLog = ExecutionLog.builder()
                 .workflowId(workflowId)
                 .workflowName(workflow.getWorkflowName())
@@ -96,20 +95,16 @@ public class OrchestrationService {
                 .status(ExecutionStatus.RUNNING)
                 .currentStage("QUEUED")
                 .stageStatuses(initialStageStatuses())
-                .triggeredBy(currentTrigger(workflow))
-                .logOutput("Pipeline '" + workflow.getWorkflowName() + "' accepté; transport en cours.\n")
+                .triggeredBy(triggeredBy)
+                .logOutput("Pipeline '" + workflow.getWorkflowName()
+                        + "' accepte; ordre de transport en attente de prise en charge.\n")
                 .build();
         execLog = executionLogRepository.save(execLog);
 
-        // Le worker s'exécute hors du thread HTTP et n'hérite donc pas du
-        // contexte de sécurité. Sans propagation explicite, l'authentification y
-        // serait nulle et les contrôles de propriété des connexions
-        // (DestinationConnectionService.assertCanAccess) passeraient en silence.
-        SecurityContext securityContext = SecurityContextHolder.getContext();
         String execLogId = execLog.getId();
         try {
             pipelineExecutionExecutor.execute(
-                    () -> transportAndPublish(workflowId, execLogId, securityContext));
+                    () -> publishTransportOrder(workflowId, execLogId, triggeredBy));
         } catch (RejectedExecutionException saturated) {
             markSubmissionFailed(execLog, "Capacite d'execution saturee: " + saturated.getMessage());
             throw saturated;
@@ -120,30 +115,28 @@ public class OrchestrationService {
     }
 
     /**
-     * Extraction, transport et publication de la commande. S'exécute sur le pool
-     * borné : toute exception est consignée dans le journal, jamais propagée à un
-     * appelant — il n'y en a plus.
+     * Publication de l'ordre de transport. Toute exception est consignee dans le
+     * journal; la lecture de la source appartient exclusivement au gateway.
      */
-    private void transportAndPublish(String workflowId, String execLogId, SecurityContext securityContext) {
-        SecurityContextHolder.setContext(securityContext);
+    private void publishTransportOrder(String workflowId, String execLogId, String requestedBy) {
         try {
             WorkflowConfig workflow = workflowConfigRepository.findById(workflowId)
                     .orElseThrow(() -> new ResourceNotFoundException("Workflow introuvable: " + workflowId));
-            String kafkaResult = kafkaPipelineEventService.publishExecutionRequested(workflow, execLogId);
+            String kafkaResult = transportOrderPublisher.publishTransportRequested(
+                    workflow, execLogId, requestedBy);
 
             executionLogRepository.findById(execLogId).ifPresent(current -> {
                 current.setLogOutput(current.getLogOutput() + kafkaResult + "\n");
                 executionLogRepository.save(current);
             });
-            log.info("Pipeline '{}' soumis à Kafka. ExecutionLog id={}",
+            log.info("Ordre de transport du pipeline '{}' soumis a Kafka. ExecutionLog id={}",
                      workflow.getWorkflowName(), execLogId);
         } catch (Exception error) {
-            log.error("Echec du transport pour l'execution {}: {}", execLogId, rootMessage(error), error);
+            log.error("Echec de publication de l'ordre pour l'execution {}: {}",
+                    execLogId, rootMessage(error), error);
             executionLogRepository.findById(execLogId).ifPresent(current ->
                     markSubmissionFailed(current,
-                            "La commande d'execution n'a pas pu etre publiee: " + rootMessage(error)));
-        } finally {
-            SecurityContextHolder.clearContext();
+                            "L'ordre de transport n'a pas pu etre publie: " + rootMessage(error)));
         }
     }
 
@@ -179,6 +172,7 @@ public class OrchestrationService {
 
     private Map<String, String> initialStageStatuses() {
         Map<String, String> statuses = new LinkedHashMap<>();
+        statuses.put("TRANSPORT", "NOT_RUN");
         statuses.put("PREPARATION", "NOT_RUN");
         statuses.put("BRONZE", "NOT_RUN");
         statuses.put("SILVER", "NOT_RUN");

@@ -6,15 +6,12 @@ import com.iol.etlplatform.sourcegateway.exception.BadRequestException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
-import java.io.BufferedWriter;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -52,31 +49,24 @@ public class ApiSourceClient {
         return columns;
     }
 
-    public long writeCsv(Map<String, Object> config, Path output) {
+    /** Parcourt les pages et transmet chaque objet JSON sans conversion intermediaire. */
+    public long streamRows(Map<String, Object> config, RowConsumer consumer) {
         Pagination pagination = Pagination.from(map(config.get("pagination")));
-        List<String> headers = null;
         long rowCount = 0;
         String cursor = string(pagination.initialCursor());
 
-        try (BufferedWriter writer = Files.newBufferedWriter(output, StandardCharsets.UTF_8)) {
+        try {
             for (int pageIndex = 0; pageIndex < pagination.maxPages(); pageIndex++) {
                 Page page = fetchPage(config, pageIndex, cursor);
                 if (page.rows().isEmpty()) {
                     break;
                 }
-                if (headers == null) {
-                    headers = new ArrayList<>();
-                    var fieldNames = page.rows().get(0).fieldNames();
-                    while (fieldNames.hasNext()) headers.add(fieldNames.next());
-                    if (headers.isEmpty()) {
-                        throw new BadRequestException("La réponse API ne contient aucune colonne exploitable.");
-                    }
-                    writer.write(csvLine(headers, null));
-                    writer.newLine();
-                }
                 for (JsonNode row : page.rows()) {
-                    writer.write(csvLine(headers, row));
-                    writer.newLine();
+                    if (!row.isObject() || row.isEmpty()) {
+                        throw new BadRequestException(
+                                "La réponse API contient une ligne sans colonne exploitable.");
+                    }
+                    consumer.accept(row);
                     rowCount++;
                 }
                 if (pagination.type().equals("NONE")) {
@@ -232,20 +222,6 @@ public class ApiSourceClient {
         return URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 
-    private String csvLine(List<String> headers, JsonNode row) {
-        List<String> values = new ArrayList<>();
-        for (String header : headers) {
-            JsonNode value = row == null ? null : row.path(header);
-            String text = row == null ? header
-                    : value == null || value.isMissingNode() || value.isNull() ? ""
-                    : value.isContainerNode() ? value.toString() : value.asText();
-            String escaped = text.replace("\"", "\"\"");
-            values.add(text.contains(",") || text.contains("\"") || text.contains("\n") || text.contains("\r")
-                    ? "\"" + escaped + "\"" : escaped);
-        }
-        return String.join(",", values);
-    }
-
     private String jsonType(JsonNode value) {
         if (value.isIntegralNumber()) return "BIGINT";
         if (value.isFloatingPointNumber()) return "DECIMAL";
@@ -273,6 +249,11 @@ public class ApiSourceClient {
     }
 
     private record Page(List<JsonNode> rows, String nextCursor) { }
+
+    @FunctionalInterface
+    public interface RowConsumer {
+        void accept(JsonNode row) throws Exception;
+    }
 
     private record Pagination(
             String type, int pageSize, int maxPages, int startPage,

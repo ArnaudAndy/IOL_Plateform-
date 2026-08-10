@@ -27,6 +27,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 
 import java.sql.*;
+import java.time.Instant;
 import java.util.*;
 
 @Service
@@ -80,6 +81,9 @@ public class WorkflowService {
         }
         entity.setActive(true);
         entity.setCreatedBy(getCurrentUserEmail());
+        String now = Instant.now().toString();
+        entity.setCreatedAt(now);
+        entity.setUpdatedAt(now);
         WorkflowConfig saved = workflowConfigRepository.save(entity);
         schedulerService.reschedule(saved);
         log.info("Metadonnees pipeline sauvegardees dans MongoDB collection workflow_configs: {}", saved.getId());
@@ -119,6 +123,8 @@ public class WorkflowService {
         toUpdate.setId(existing.getId());
         toUpdate.setActive(existing.isActive());
         toUpdate.setCreatedBy(existing.getCreatedBy());
+        toUpdate.setCreatedAt(existing.getCreatedAt());
+        toUpdate.setUpdatedAt(Instant.now().toString());
         WorkflowConfig updated = workflowConfigRepository.save(toUpdate);
         schedulerService.reschedule(updated);
         return workflowConfigMapper.toDto(updated);

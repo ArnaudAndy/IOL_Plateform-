@@ -219,26 +219,112 @@ services:
         condition: service_healthy
       rustfs-lb:
         condition: service_healthy
+      rustfs-init:
+        condition: service_completed_successfully
       clamav-tls:
         condition: service_started
-      keycloak-bootstrap:
-        condition: service_completed_successfully
+      keycloak:
+        condition: service_healthy
     networks: [iol-internal, iol-egress, iol-vault]
-    # api-core porte le transport des donnees source: sans plafond, une extraction
-    # concurrente consomme la RAM de l'hote et emporte l'API, le portail et les
-    # probes qui vivent dans la meme JVM. MaxRAMPercentage borne le heap DANS la
-    # limite du conteneur; les deux sont necessaires.
+    # api-core reste le plan de controle et l'entree interop HTTP. Les lectures
+    # de sources sont isolees dans source-gateway.
     deploy:
       resources:
-        limits: {cpus: "4", memory: 6G}
+        limits: {cpus: "4", memory: 4G}
         reservations: {cpus: "1", memory: 2G}
+    security_opt: ["no-new-privileges:true"]
+
+  source-gateway:
+    image: "${IOL_IMAGE_REGISTRY:-ghcr.io/speedykom}/iol-source-gateway:${IOL_RELEASE_TAG:-preproduction}"
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      MONGODB_PASSWORD_FILE: "/run/secrets/mongodb-gateway-password"
+      MONGODB_URI: "mongodb://iol_gateway:$${MONGODB_PASSWORD}@mongodb:27017,mongodb-2:27017,mongodb-3:27017/iol_metadata?replicaSet=rs-iol&authSource=iol_metadata&tls=true&tlsCAFile=/run/tls/ca.pem&tlsCertificateKeyFile=/run/tls/source-gateway.pem&serverSelectionTimeoutMS=5000"
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092,kafka-2:9092,kafka-3:9092"
+      APP_KAFKA_MAX_POLL_INTERVAL_MS: "${APP_KAFKA_MAX_POLL_INTERVAL_MS:-604800000}"
+      SPRING_KAFKA_PROPERTIES_SECURITY_PROTOCOL: SSL
+      SPRING_KAFKA_PROPERTIES_SSL_TRUSTSTORE_LOCATION: "/run/tls/truststore.p12"
+      SPRING_KAFKA_PROPERTIES_SSL_TRUSTSTORE_TYPE: PKCS12
+      SPRING_KAFKA_PROPERTIES_SSL_TRUSTSTORE_PASSWORD: "$${KAFKA_SSL_TRUSTSTORE_PASSWORD}"
+      SPRING_KAFKA_PROPERTIES_SSL_KEYSTORE_LOCATION: "/run/tls/source-gateway.p12"
+      SPRING_KAFKA_PROPERTIES_SSL_KEYSTORE_TYPE: PKCS12
+      SPRING_KAFKA_PROPERTIES_SSL_KEYSTORE_PASSWORD: "$${KAFKA_SSL_KEYSTORE_PASSWORD}"
+      SPRING_KAFKA_PROPERTIES_SSL_KEY_PASSWORD: "$${KAFKA_SSL_KEY_PASSWORD}"
+      KAFKA_SSL_KEYSTORE_PASSWORD_FILE: "/run/secrets/tls-store-password"
+      KAFKA_SSL_KEY_PASSWORD_FILE: "/run/secrets/tls-store-password"
+      KAFKA_SSL_TRUSTSTORE_PASSWORD_FILE: "/run/secrets/tls-store-password"
+      GATEWAY_TLS_KEYSTORE: "file:/run/tls/source-gateway.p12"
+      GATEWAY_TLS_KEYSTORE_PASSWORD_FILE: "/run/secrets/tls-store-password"
+      IOL_TLS_KEYSTORE_PATH: "/run/tls/source-gateway.p12"
+      IOL_TLS_TRUSTSTORE: "file:/run/tls/truststore.p12"
+      IOL_TLS_TRUSTSTORE_PATH: "/run/tls/truststore.p12"
+      IOL_TLS_TRUSTSTORE_PASSWORD_FILE: "/run/secrets/tls-store-password"
+      CREDENTIAL_PROVIDER: VAULT_TRANSIT
+      CREDENTIAL_ENVIRONMENT: production
+      CREDENTIAL_ALLOW_LEGACY_PLAINTEXT: "false"
+      VAULT_ADDR: "${VAULT_ADDR}"
+      VAULT_NAMESPACE: "${VAULT_NAMESPACE:-}"
+      VAULT_ROLE_ID_FILE: "/run/secrets/vault-source-gateway-role-id"
+      VAULT_SECRET_ID_FILE: "/run/secrets/vault-source-gateway-secret-id"
+      VAULT_TRANSIT_MOUNT: "${VAULT_TRANSIT_MOUNT:-transit}"
+      VAULT_TRANSIT_KEY: "${VAULT_TRANSIT_KEY:-iol-business-credentials}"
+      OBJECT_STORAGE_ENABLED: "true"
+      OBJECT_STORAGE_ENDPOINT: "https://rustfs-lb:9000"
+      OBJECT_STORAGE_REGION: "us-east-1"
+      OBJECT_STORAGE_BUCKET: "${OBJECT_STORAGE_BUCKET:-iol-source-data}"
+      OBJECT_STORAGE_ACCESS_KEY: ""
+      OBJECT_STORAGE_SECRET_KEY: ""
+      OBJECT_STORAGE_ACCESS_KEY_FILE: "/run/secrets/rustfs-app-access-key"
+      OBJECT_STORAGE_SECRET_KEY_FILE: "/run/secrets/rustfs-app-secret-key"
+      OBJECT_STORAGE_CREATE_BUCKET_IF_MISSING: "false"
+      SPARK_ROW_THRESHOLD: "${SPARK_ROW_THRESHOLD:-10000000}"
+      SPARK_FILE_SIZE_THRESHOLD_BYTES: "${SPARK_FILE_SIZE_THRESHOLD_BYTES:-2147483648}"
+      APP_KAFKA_CONSUMER_CONCURRENCY: "${SOURCE_GATEWAY_CONCURRENCY:-2}"
+      APP_EXECUTION_MAX_SOURCE_CONNECTIONS: "${SOURCE_GATEWAY_MAX_SOURCE_CONNECTIONS:-8}"
+      APP_UPLOAD_ROOT: "/data/iol/uploads"
+    volumes: !override
+      - iol-upload-data:/data/iol/uploads:ro
+      - ./secrets/runtime-tls/source-gateway:/run/tls:ro
+    secrets:
+      - mongodb-gateway-password
+      - tls-store-password
+      - vault-source-gateway-role-id
+      - vault-source-gateway-secret-id
+      - rustfs-app-access-key
+      - rustfs-app-secret-key
+    depends_on: !override
+      kafka-init:
+        condition: service_completed_successfully
+      mongodb-init:
+        condition: service_completed_successfully
+      rustfs-lb:
+        condition: service_healthy
+      rustfs-init:
+        condition: service_completed_successfully
+    networks: [iol-internal, iol-egress, iol-vault]
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    deploy:
+      replicas: "${SOURCE_GATEWAY_REPLICAS:-3}"
+      resources:
+        limits: {cpus: "4", memory: 4G}
+        reservations: {cpus: "1", memory: 1G}
     security_opt: ["no-new-privileges:true"]
 
   pipeline-consumer:
     image: "${IOL_IMAGE_REGISTRY:-ghcr.io/speedykom}/iol-pipeline-consumer:${IOL_RELEASE_TAG:-preproduction}"
     environment:
+      SPRING_PROFILES_ACTIVE: linux,prod
+      MONGODB_PASSWORD_FILE: "/run/secrets/mongodb-pipeline-password"
+      MONGODB_URI: "mongodb://iol_pipeline:$${MONGODB_PASSWORD}@mongodb:27017,mongodb-2:27017,mongodb-3:27017/iol_metadata?replicaSet=rs-iol&authSource=iol_metadata&tls=true&tlsCAFile=/run/tls/ca.pem&tlsCertificateKeyFile=/run/tls/pipeline-consumer.pem&serverSelectionTimeoutMS=5000"
       KAFKA_BOOTSTRAP_SERVERS: "kafka:9092,kafka-2:9092,kafka-3:9092"
       KAFKA_CONSUMER_GROUP: iol-pipeline-consumer
+      # Le listener reste synchrone jusqu'au statut terminal. Cette valeur doit
+      # couvrir le pipeline Big Data le plus long qualifie (ici 7 jours).
+      APP_KAFKA_MAX_POLL_INTERVAL_MS: "${APP_KAFKA_MAX_POLL_INTERVAL_MS:-604800000}"
+      HOP_EXECUTION_TIMEOUT_SECONDS: "${HOP_EXECUTION_TIMEOUT_SECONDS:-86400}"
+      SPARK_EXECUTION_TIMEOUT_SECONDS: "${SPARK_EXECUTION_TIMEOUT_SECONDS:-518400}"
       SPRING_KAFKA_PROPERTIES_SECURITY_PROTOCOL: SSL
       SPRING_KAFKA_PROPERTIES_SSL_TRUSTSTORE_LOCATION: "/run/tls/truststore.p12"
       SPRING_KAFKA_PROPERTIES_SSL_TRUSTSTORE_TYPE: PKCS12
@@ -282,6 +368,7 @@ services:
       - ./secrets/runtime-tls/pipeline-consumer:/run/tls:ro
     secrets:
       - postgres-password
+      - mongodb-pipeline-password
       - tls-store-password
       - keycloak-pipeline-client-secret
       - rustfs-app-access-key
@@ -290,16 +377,20 @@ services:
     depends_on:
       kafka-init:
         condition: service_completed_successfully
+      mongodb-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       rustfs-lb:
         condition: service_healthy
+      rustfs-init:
+        condition: service_completed_successfully
       spark-master:
         condition: service_healthy
       spark-worker:
         condition: service_healthy
-      keycloak-bootstrap:
-        condition: service_completed_successfully
+      keycloak:
+        condition: service_healthy
     networks: [iol-internal, iol-egress]
     deploy:
       replicas: "${PIPELINE_CONSUMER_REPLICAS:-3}"
@@ -522,6 +613,8 @@ services:
     environment:
       MONGO_INITDB_ROOT_USERNAME: iol_root
       MONGODB_APP_USERNAME: iol_app
+      MONGODB_GATEWAY_USERNAME: iol_gateway
+      MONGODB_PIPELINE_USERNAME: iol_pipeline
       OPENHIM_MONGODB_USERNAME: openhim_app
     volumes:
       - ./ops/mongodb/init-replica-set.sh:/opt/iol/init-replica-set.sh:ro
@@ -530,6 +623,8 @@ services:
       - mongodb-root-password
       - mongodb-app-password
       - mongodb-openhim-password
+      - mongodb-gateway-password
+      - mongodb-pipeline-password
     depends_on:
       mongodb: {condition: service_healthy}
       mongodb-2: {condition: service_healthy}
@@ -734,6 +829,31 @@ services:
     tmpfs: [/var/cache/nginx, /var/run]
     security_opt: ["no-new-privileges:true"]
 
+  rustfs-init:
+    image: "minio/mc:${MINIO_MC_VERSION:-RELEASE.2025-05-21T01-59-54Z}"
+    restart: "no"
+    entrypoint: ["/bin/sh", "/opt/iol/provision-application-access.sh"]
+    environment:
+      RUSTFS_ENDPOINT: "https://rustfs-lb:9000"
+      OBJECT_STORAGE_BUCKET: "${OBJECT_STORAGE_BUCKET:-iol-source-data}"
+      SSL_CERT_FILE: "/run/tls/ca.pem"
+    volumes:
+      - ./rustfs/provision-application-access.sh:/opt/iol/provision-application-access.sh:ro
+      - ./secrets/runtime-tls/rustfs-lb:/run/tls:ro
+    secrets:
+      - rustfs-root-access-key
+      - rustfs-root-secret-key
+      - rustfs-app-access-key
+      - rustfs-app-secret-key
+    depends_on:
+      rustfs-lb:
+        condition: service_healthy
+    networks: [iol-internal]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt: ["no-new-privileges:true"]
+
   keycloak-realm-render:
     image: "${IOL_IMAGE_REGISTRY:-ghcr.io/speedykom}/iol-keycloak-realm-render:${IOL_RELEASE_TAG:-preproduction}"
     build:
@@ -899,6 +1019,8 @@ secrets:
   mongodb-root-password: {file: ./secrets/mongodb-root-password}
   mongodb-app-password: {file: ./secrets/mongodb-app-password}
   mongodb-openhim-password: {file: ./secrets/mongodb-openhim-password}
+  mongodb-gateway-password: {file: ./secrets/mongodb-gateway-password}
+  mongodb-pipeline-password: {file: ./secrets/mongodb-pipeline-password}
   mongodb-keyfile: {file: ./secrets/mongodb-keyfile}
   rustfs-root-access-key: {file: ./secrets/rustfs-root-access-key}
   rustfs-root-secret-key: {file: ./secrets/rustfs-root-secret-key}
@@ -912,6 +1034,8 @@ secrets:
   spark-auth-secret: {file: ./secrets/spark-auth-secret}
   vault-api-role-id: {file: ./secrets/vault-generated/vault-api-role-id}
   vault-api-secret-id: {file: ./secrets/vault-generated/vault-api-secret-id}
+  vault-source-gateway-role-id: {file: ./secrets/vault-generated/vault-source-gateway-role-id}
+  vault-source-gateway-secret-id: {file: ./secrets/vault-generated/vault-source-gateway-secret-id}
   keycloak-db-password: {file: ./secrets/keycloak-db-password}
   keycloak-bootstrap-admin-password: {file: ./secrets/keycloak-bootstrap-admin-password}
   keycloak-api-admin-client-secret: {file: ./secrets/keycloak-api-admin-client-secret}

@@ -27,7 +27,7 @@ import com.iol.etlplatform.entity.ExecutionLog;
 import com.iol.etlplatform.entity.WorkflowConfig;
 import com.iol.etlplatform.entity.enums.ExecutionStatus;
 import com.iol.etlplatform.exception.ConflictException;
-import com.iol.etlplatform.kafka.KafkaPipelineEventService;
+import com.iol.etlplatform.kafka.TransportOrderPublisher;
 import com.iol.etlplatform.repository.ExecutionLogRepository;
 import com.iol.etlplatform.repository.WorkflowConfigRepository;
 
@@ -49,7 +49,7 @@ class OrchestrationServiceTest {
     private ExecutionLogRepository executionLogRepository;
 
     @Mock
-    private KafkaPipelineEventService kafkaPipelineEventService;
+    private TransportOrderPublisher transportOrderPublisher;
 
     private WorkflowConfig workflow;
 
@@ -59,6 +59,7 @@ class OrchestrationServiceTest {
         workflow.setId("wf-1");
         workflow.setWorkflowName("Patients");
         workflow.setActive(true);
+        workflow.setCreatedBy("owner@iol.test");
 
         when(workflowConfigRepository.findById("wf-1")).thenReturn(Optional.of(workflow));
         when(executionLogRepository.save(any(ExecutionLog.class)))
@@ -76,7 +77,7 @@ class OrchestrationServiceTest {
 
     private OrchestrationService serviceWith(Executor executor) {
         return new OrchestrationService(
-                workflowConfigRepository, executionLogRepository, kafkaPipelineEventService, executor);
+                workflowConfigRepository, executionLogRepository, transportOrderPublisher, executor);
     }
 
     /** Un executor qui ne lance rien: prouve que la soumission ne transporte pas. */
@@ -89,17 +90,20 @@ class OrchestrationServiceTest {
         assertEquals("QUEUED", result.getCurrentStage());
         assertEquals(ExecutionStatus.RUNNING, result.getStatus());
         // Le point essentiel: aucune publication n'a eu lieu sur le thread appelant.
-        verify(kafkaPipelineEventService, never()).publishExecutionRequested(any(), anyString());
+        verify(transportOrderPublisher, never())
+                .publishTransportRequested(any(), anyString(), anyString());
     }
 
     @Test
     void leTransportSExecuteSurLExecutorFourni() {
-        when(kafkaPipelineEventService.publishExecutionRequested(any(), eq("exec-1")))
+        when(transportOrderPublisher.publishTransportRequested(
+                any(), eq("exec-1"), eq("owner@iol.test")))
                 .thenReturn("publie");
 
         serviceWith(Runnable::run).runWorkflow("wf-1");
 
-        verify(kafkaPipelineEventService).publishExecutionRequested(any(), eq("exec-1"));
+        verify(transportOrderPublisher).publishTransportRequested(
+                any(), eq("exec-1"), eq("owner@iol.test"));
     }
 
     @Test
@@ -135,7 +139,8 @@ class OrchestrationServiceTest {
 
     @Test
     void unEchecDeTransportNeRemontePasMaisMarqueLeJournal() {
-        when(kafkaPipelineEventService.publishExecutionRequested(any(), eq("exec-1")))
+        when(transportOrderPublisher.publishTransportRequested(
+                any(), eq("exec-1"), eq("owner@iol.test")))
                 .thenThrow(new IllegalStateException("kafka indisponible"));
 
         // L'appelant a deja recu sa reponse: l'echec ne doit pas etre propage.

@@ -4,6 +4,8 @@ set -eu
 ROOT_PASSWORD="$(cat /run/secrets/mongodb-root-password)"
 APP_PASSWORD="$(cat /run/secrets/mongodb-app-password)"
 OPENHIM_PASSWORD="$(cat /run/secrets/mongodb-openhim-password)"
+GATEWAY_PASSWORD="$(cat /run/secrets/mongodb-gateway-password)"
+PIPELINE_PASSWORD="$(cat /run/secrets/mongodb-pipeline-password)"
 MONGO_ARGS="--tls --tlsCAFile /run/tls/ca.pem --tlsCertificateKeyFile /run/tls/mongodb.pem --host mongodb --port 27017"
 
 until mongosh ${MONGO_ARGS} --quiet --eval 'db.adminCommand({ ping: 1 }).ok' 2>/dev/null \
@@ -38,7 +40,12 @@ mongosh ${MONGO_ARGS} \
   --username "${MONGO_INITDB_ROOT_USERNAME}" --password "${ROOT_PASSWORD}" \
   --authenticationDatabase admin --eval "
     const appDb = db.getSiblingDB('iol_metadata');
-    if (!appDb.getUser('${MONGODB_APP_USERNAME}')) {
+    if (appDb.getUser('${MONGODB_APP_USERNAME}')) {
+      appDb.updateUser('${MONGODB_APP_USERNAME}', {
+        pwd: '${APP_PASSWORD}',
+        roles: [{ role: 'readWrite', db: 'iol_metadata' }]
+      });
+    } else {
       appDb.createUser({
         user: '${MONGODB_APP_USERNAME}',
         pwd: '${APP_PASSWORD}',
@@ -61,8 +68,7 @@ mongosh ${MONGO_ARGS} \
   --username "${MONGO_INITDB_ROOT_USERNAME}" --password "${ROOT_PASSWORD}" \
   --authenticationDatabase admin --eval "
     const appDb = db.getSiblingDB('iol_metadata');
-    if (!appDb.getRole('iolSourceGateway')) {
-      appDb.createRole({
+    const gatewayRole = {
         role: 'iolSourceGateway',
         privileges: [
           {
@@ -71,13 +77,64 @@ mongosh ${MONGO_ARGS} \
           }
         ],
         roles: [{ role: 'read', db: 'iol_metadata' }]
+      };
+    if (appDb.getRole('iolSourceGateway')) {
+      appDb.updateRole(gatewayRole.role, {
+        privileges: gatewayRole.privileges,
+        roles: gatewayRole.roles
       });
-    }
-    if (!appDb.getUser('${MONGODB_GATEWAY_USERNAME:-iol_gateway}')) {
+    } else appDb.createRole(gatewayRole);
+    if (appDb.getUser('${MONGODB_GATEWAY_USERNAME:-iol_gateway}')) {
+      appDb.updateUser('${MONGODB_GATEWAY_USERNAME:-iol_gateway}', {
+        pwd: '${GATEWAY_PASSWORD}',
+        roles: [{ role: 'iolSourceGateway', db: 'iol_metadata' }]
+      });
+    } else {
       appDb.createUser({
         user: '${MONGODB_GATEWAY_USERNAME:-iol_gateway}',
-        pwd: '${GATEWAY_PASSWORD:-${APP_PASSWORD}}',
+        pwd: '${GATEWAY_PASSWORD}',
         roles: [{ role: 'iolSourceGateway', db: 'iol_metadata' }]
+      });
+    }
+  "
+
+# Le consumer ne lit pas les workflows dans MongoDB: il ne persiste que son
+# inbox d'execution et les lots de donnees Kafka. Ce compte ne peut donc ni lire
+# ni modifier les configurations, utilisateurs ou connexions metier.
+mongosh ${MONGO_ARGS} \
+  --username "${MONGO_INITDB_ROOT_USERNAME}" --password "${ROOT_PASSWORD}" \
+  --authenticationDatabase admin --eval "
+    const appDb = db.getSiblingDB('iol_metadata');
+    const pipelineRole = {
+      role: 'iolPipelineConsumer',
+      privileges: [
+        {
+          resource: { db: 'iol_metadata', collection: 'pipeline_execution_claims' },
+          actions: ['find', 'insert', 'update', 'remove', 'createIndex']
+        },
+        {
+          resource: { db: 'iol_metadata', collection: 'pipeline_data_chunks' },
+          actions: ['find', 'insert', 'update', 'remove', 'createIndex']
+        }
+      ],
+      roles: []
+    };
+    if (appDb.getRole('iolPipelineConsumer')) {
+      appDb.updateRole(pipelineRole.role, {
+        privileges: pipelineRole.privileges,
+        roles: pipelineRole.roles
+      });
+    } else appDb.createRole(pipelineRole);
+    if (appDb.getUser('${MONGODB_PIPELINE_USERNAME:-iol_pipeline}')) {
+      appDb.updateUser('${MONGODB_PIPELINE_USERNAME:-iol_pipeline}', {
+        pwd: '${PIPELINE_PASSWORD}',
+        roles: [{ role: 'iolPipelineConsumer', db: 'iol_metadata' }]
+      });
+    } else {
+      appDb.createUser({
+        user: '${MONGODB_PIPELINE_USERNAME:-iol_pipeline}',
+        pwd: '${PIPELINE_PASSWORD}',
+        roles: [{ role: 'iolPipelineConsumer', db: 'iol_metadata' }]
       });
     }
   "
@@ -86,7 +143,12 @@ mongosh ${MONGO_ARGS} \
   --username "${MONGO_INITDB_ROOT_USERNAME}" --password "${ROOT_PASSWORD}" \
   --authenticationDatabase admin --eval "
     const openhimDb = db.getSiblingDB('openhim');
-    if (!openhimDb.getUser('${OPENHIM_MONGODB_USERNAME}')) {
+    if (openhimDb.getUser('${OPENHIM_MONGODB_USERNAME}')) {
+      openhimDb.updateUser('${OPENHIM_MONGODB_USERNAME}', {
+        pwd: '${OPENHIM_PASSWORD}',
+        roles: [{ role: 'readWrite', db: 'openhim' }]
+      });
+    } else {
       openhimDb.createUser({
         user: '${OPENHIM_MONGODB_USERNAME}',
         pwd: '${OPENHIM_PASSWORD}',

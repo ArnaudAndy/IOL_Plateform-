@@ -12,6 +12,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.CompletableFuture;
+import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -34,14 +36,30 @@ class TransportOrderListenerTest {
     private final KafkaTemplate<String, String> kafka = mock(KafkaTemplate.class);
     private Acknowledgment ack;
     private AtomicInteger acknowledged;
+    private AtomicInteger nacked;
 
     @BeforeEach
     void setUp() {
         guard = new RecordingGuard();
         listener = new TransportOrderListener(new ObjectMapper(), kafka, guard);
         ReflectionTestUtils.setField(listener, "dlqTopic", "iol.transport.requests.dlq");
+        ReflectionTestUtils.setField(listener, "maxAttempts", 5);
+        ReflectionTestUtils.setField(listener, "retryBackoffSeconds", 1L);
+        org.mockito.Mockito.when(kafka.send(anyString(), anyString(), anyString()))
+                .thenReturn(CompletableFuture.completedFuture(null));
         acknowledged = new AtomicInteger();
-        ack = acknowledged::incrementAndGet;
+        nacked = new AtomicInteger();
+        ack = new Acknowledgment() {
+            @Override
+            public void acknowledge() {
+                acknowledged.incrementAndGet();
+            }
+
+            @Override
+            public void nack(Duration sleep) {
+                nacked.incrementAndGet();
+            }
+        };
     }
 
     private ConsumerRecord<String, String> record(String payload) {
@@ -50,9 +68,10 @@ class TransportOrderListenerTest {
 
     private static String validOrder() {
         return """
-               {"eventType":"TRANSPORT_REQUESTED","schemaVersion":1,
-                "organizationId":"iol-default","workflowId":"wf-1",
-                "execLogId":"exec-1","executionKey":"iol-default:wf-1",
+            {"eventType":"TRANSPORT_REQUESTED","schemaVersion":2,
+             "organizationId":"iol-default","workflowId":"wf-1",
+             "workflowRevision":"legacy-unversioned",
+             "execLogId":"exec-1","executionKey":"iol-default:wf-1",
                 "requestedAt":"2026-08-07T10:15:00Z","priority":3}
                """;
     }
@@ -75,6 +94,7 @@ class TransportOrderListenerTest {
 
         assertEquals(0, acknowledged.get(),
                 "sans acquittement, Kafka redelivrera l'ordre");
+        assertEquals(1, nacked.get(), "la reprise doit etre explicitement demandee");
         assertTrue(guard.released.get(), "la reservation doit etre relachee pour permettre la reprise");
     }
 
@@ -90,7 +110,7 @@ class TransportOrderListenerTest {
 
     @Test
     void uneVersionDeContratInconnueEstRefusee() {
-        String futureVersion = validOrder().replace("\"schemaVersion\":1", "\"schemaVersion\":99");
+        String futureVersion = validOrder().replace("\"schemaVersion\":2", "\"schemaVersion\":99");
 
         listener.onTransportOrder(record(futureVersion), ack);
 
@@ -101,12 +121,38 @@ class TransportOrderListenerTest {
 
     @Test
     void uneRedelivranceDejaTraiteeNeRelancePasLExtraction() {
-        guard.claimGranted = false;
+        guard.claim = TransportExecutionGuard.Claim.of(
+                TransportExecutionGuard.ClaimState.COMPLETED, 1);
 
         listener.onTransportOrder(record(validOrder()), ack);
 
         assertFalse(guard.transported.get(), "pas de double extraction apres un rebalance");
         assertEquals(1, acknowledged.get(), "l'ordre deja traite doit etre acquitte");
+    }
+
+    @Test
+    void uneExecutionEncoreDetenueNestJamaisAcquittee() {
+        guard.claim = TransportExecutionGuard.Claim.of(
+                TransportExecutionGuard.ClaimState.BUSY, 1);
+
+        listener.onTransportOrder(record(validOrder()), ack);
+
+        assertEquals(0, acknowledged.get());
+        assertEquals(1, nacked.get(), "le message doit revenir si le detenteur disparait");
+        assertFalse(guard.transported.get());
+    }
+
+    @Test
+    void apresLeMaximumDeTentativesLaDlqEtLEchecSontDurablesAvantAck() {
+        guard.claim = TransportExecutionGuard.Claim.acquired("token-5", 5);
+        guard.failWith = new IllegalStateException("source toujours injoignable");
+
+        listener.onTransportOrder(record(validOrder()), ack);
+
+        verify(kafka).send(anyString(), anyString(), anyString());
+        assertTrue(guard.permanentlyFailed.get());
+        assertEquals(1, acknowledged.get());
+        assertEquals(0, nacked.get());
     }
 
     /** Garde instrumente: enregistre l'ordre reel des effets. */
@@ -115,25 +161,37 @@ class TransportOrderListenerTest {
         final AtomicBooleanBox released = new AtomicBooleanBox();
         final AtomicBooleanBox transportPrecededAck = new AtomicBooleanBox();
         final AtomicReference<TransportOrder> seen = new AtomicReference<>();
-        boolean claimGranted = true;
+        TransportExecutionGuard.Claim claim = TransportExecutionGuard.Claim.acquired("token-1", 1);
         RuntimeException failWith;
+        final AtomicBooleanBox permanentlyFailed = new AtomicBooleanBox();
 
         @Override
-        public boolean claim(TransportOrder order) {
+        public TransportExecutionGuard.Claim claim(TransportOrder order) {
             seen.set(order);
-            return claimGranted;
+            return claim;
         }
 
         @Override
-        public void transportAndPublish(TransportOrder order) {
+        public void transportAndPublish(TransportOrder order, TransportExecutionGuard.Claim claim) {
             if (failWith != null) throw failWith;
             transported.set(true);
             transportPrecededAck.set(true);
         }
 
         @Override
-        public void release(TransportOrder order, Throwable cause) {
+        public void release(
+                TransportOrder order,
+                TransportExecutionGuard.Claim claim,
+                Throwable cause) {
             released.set(true);
+        }
+
+        @Override
+        public void failPermanently(
+                TransportOrder order,
+                TransportExecutionGuard.Claim claim,
+                Throwable cause) {
+            permanentlyFailed.set(true);
         }
     }
 

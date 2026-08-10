@@ -13,6 +13,9 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
+import java.util.concurrent.TimeUnit;
+
 /**
  * Consomme les ordres de transport et garantit l'invariant central de la
  * plateforme.
@@ -55,6 +58,12 @@ public class TransportOrderListener {
     @Value("${app.kafka.topics.transport-dlq:iol.transport.requests.dlq}")
     private String dlqTopic;
 
+    @Value("${app.kafka.consumer.max-attempts:5}")
+    private int maxAttempts;
+
+    @Value("${app.kafka.consumer.retry-backoff-seconds:10}")
+    private long retryBackoffSeconds;
+
     public TransportOrderListener(
             ObjectMapper objectMapper,
             KafkaTemplate<String, String> kafkaTemplate,
@@ -77,44 +86,101 @@ public class TransportOrderListener {
             // Un ordre illisible ou d'une version inconnue ne redeviendra jamais
             // valide: le rejouer bloquerait la partition indefiniment.
             log.error("Ordre de transport invalide, envoi en file d'erreurs: {}", poison.getMessage());
-            sendToDlq(record, poison);
-            ack.acknowledge();
+            try {
+                sendToDlq(record);
+                ack.acknowledge();
+            } catch (Exception dlqFailure) {
+                log.error("File d'erreurs inaccessible; poison non acquitte: {}",
+                        dlqFailure.getMessage(), dlqFailure);
+                retryLater(ack);
+            }
             return;
         }
 
-        // Une redelivrance apres rebalance ne doit pas relancer une extraction
-        // deja effectuee: l'execution serait extraite et chargee deux fois.
-        if (!executionGuard.claim(order)) {
-            log.info("Ordre deja traite ou en cours, ignore: execLogId={}", order.execLogId());
+        TransportExecutionGuard.Claim claim;
+        try {
+            claim = executionGuard.claim(order);
+        } catch (Exception claimFailure) {
+            log.error("Reservation indisponible pour execLogId={}: {}",
+                    order.execLogId(), claimFailure.getMessage(), claimFailure);
+            retryLater(ack);
+            return;
+        }
+
+        if (claim.state() == TransportExecutionGuard.ClaimState.BUSY) {
+            // Ne surtout pas acquitter: l'autre instance peut disparaitre avant
+            // d'avoir publie la commande. La redelivrance reconsultera Mongo.
+            log.info("Ordre encore detenu par une autre instance: execLogId={}", order.execLogId());
+            retryLater(ack);
+            return;
+        }
+        if (claim.state() == TransportExecutionGuard.ClaimState.COMPLETED
+                || claim.state() == TransportExecutionGuard.ClaimState.FAILED) {
+            log.info("Ordre dans un etat terminal {}, acquitte: execLogId={}",
+                    claim.state(), order.execLogId());
             ack.acknowledge();
             return;
         }
 
         try {
-            executionGuard.transportAndPublish(order);
+            executionGuard.transportAndPublish(order, claim);
             // L'acquittement vient APRES la publication de la commande: c'est
             // lui qui rend l'operation durable du point de vue de Kafka.
             ack.acknowledge();
             log.info("Transport termine et commande publiee: execLogId={}", order.execLogId());
         } catch (Exception failure) {
-            // Pas d'acquittement: l'ordre sera redelivre. Le claim est relache
-            // pour qu'une reprise soit possible.
-            executionGuard.release(order, failure);
-            log.error("Echec du transport pour execLogId={}: {}",
-                      order.execLogId(), failure.getMessage(), failure);
+            if (claim.attempt() >= Math.max(1, maxAttempts)) {
+                handleExhaustedRetries(record, ack, order, claim, failure);
+                return;
+            }
+
+            safeRelease(order, claim, failure);
+            retryLater(ack);
+            log.error("Echec du transport pour execLogId={} tentative={}: {}",
+                    order.execLogId(), claim.attempt(), failure.getMessage(), failure);
         }
     }
 
-    private void sendToDlq(ConsumerRecord<String, String> record, Exception cause) {
+    private void handleExhaustedRetries(
+            ConsumerRecord<String, String> record,
+            Acknowledgment ack,
+            TransportOrder order,
+            TransportExecutionGuard.Claim claim,
+            Exception failure) {
         try {
-            kafkaTemplate.send(dlqTopic, record.key(), record.value());
-        } catch (Exception dlqFailure) {
-            // La file d'erreurs est inaccessible. On acquitte tout de meme:
-            // conserver un poison en tete de partition couterait plus cher que
-            // de perdre un ordre deja invalide, qui reste tracable par le
-            // journal d'execution reste en QUEUED puis relance par le watchdog.
-            log.error("File d'erreurs inaccessible pour un ordre invalide ({}): {}",
-                      cause.getMessage(), dlqFailure.getMessage());
+            // La DLQ doit etre confirmee AVANT l'etat terminal et l'offset.
+            // Ainsi aucune panne Kafka ne peut faire disparaitre le diagnostic.
+            sendToDlq(record);
+            executionGuard.failPermanently(order, claim, failure);
+            ack.acknowledge();
+            log.error("Transport abandonne apres {} tentative(s): execLogId={}",
+                    claim.attempt(), order.execLogId(), failure);
+        } catch (Exception terminalFailure) {
+            safeRelease(order, claim, terminalFailure);
+            retryLater(ack);
+            log.error("Echec de finalisation/DLQ pour execLogId={}: {}",
+                    order.execLogId(), terminalFailure.getMessage(), terminalFailure);
         }
+    }
+
+    private void sendToDlq(ConsumerRecord<String, String> record) throws Exception {
+        kafkaTemplate.send(dlqTopic, record.key(), record.value())
+                .get(30, TimeUnit.SECONDS);
+    }
+
+    private void safeRelease(
+            TransportOrder order,
+            TransportExecutionGuard.Claim claim,
+            Throwable cause) {
+        try {
+            executionGuard.release(order, claim, cause);
+        } catch (Exception releaseFailure) {
+            log.error("Reservation non relachee pour execLogId={}: {}",
+                    order.execLogId(), releaseFailure.getMessage(), releaseFailure);
+        }
+    }
+
+    private void retryLater(Acknowledgment ack) {
+        ack.nack(Duration.ofSeconds(Math.max(1, retryBackoffSeconds)));
     }
 }

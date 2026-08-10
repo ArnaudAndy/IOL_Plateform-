@@ -9,14 +9,15 @@ IOL est une plateforme d’intégration de données orientée métadonnées. Ell
 ## Composants réellement présents
 
 - Frontend React/Vite : interface utilisateur.
-- Backend Spring Boot : orchestration et services métier.
-- Source Gateway : lecture des sources.
-- Pipeline Consumer : exécution technique et contrôle d’intégrité.
+- API Core Spring Boot : plan de contrôle, orchestration et services métier.
+- Source Gateway : accès aux lignes source et transport Kafka/RustFS.
+- Pipeline Consumer : exécution technique, contrôle d’intégrité et reprise persistante.
 - Infrastructure Docker Compose : Kafka, MongoDB, PostgreSQL, RustFS, Keycloak, Vault, OpenHIM, ClamAV.
 
 ## Ce qu’il faut retenir
 
-- Le backend est le point de contrôle central.
+- `api-core` contrôle les exécutions ; `source-gateway` transporte les données.
+- Hop et Spark ne disposent jamais des credentials de la source.
 - Les secrets ne doivent jamais être stockés dans Git.
 - La plateforme est en préproduction durcie, pas encore pleinement qualifiée pour une production complète.
 - Le démarrage local se fait séparément pour le backend et le frontend.

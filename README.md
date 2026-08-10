@@ -15,16 +15,19 @@ Le projet comprend aujourd’hui :
 
 Le flux courant est le suivant :
 1. l’utilisateur configure une source, une destination et un workflow ;
-2. l’API prépare l’exécution ;
-3. les données sont transportées puis traitées selon un chemin Bronze/Silver/Gold ;
-4. l’utilisateur suit l’avancement depuis l’interface.
+2. l’API crée l’exécution et publie un ordre sans données ni credential ;
+3. le Source Gateway lit la source et choisit automatiquement Kafka ou RustFS
+   selon la charge ;
+4. le Pipeline Consumer vérifie le transport puis exécute le chemin
+   Bronze/Silver/Gold avec Hop ou Spark ;
+5. l’utilisateur suit l’avancement depuis l’interface sans choisir le moteur.
 
 ## Composants principaux
 
 - Frontend : interface d’administration et de suivi.
-- API : point central d’orchestration, sécurité et logique métier.
-- Source Gateway : lecture des sources et préparation des données.
-- Pipeline Consumer : réception, contrôle d’intégrité et exécution technique.
+- API : plan de contrôle, configuration, sécurité et orchestration.
+- Source Gateway : accès aux lignes source et transport des données.
+- Pipeline Consumer : réception, contrôle d’intégrité, reprise idempotente et exécution technique.
 - Infrastructure : Kafka, RustFS, MongoDB, PostgreSQL, Keycloak et Vault.
 
 ## Démarrage rapide

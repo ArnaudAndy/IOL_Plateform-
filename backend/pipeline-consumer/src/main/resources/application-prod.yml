@@ -1,0 +1,9 @@
+# Le worker n'expose aucune API. En production, son port Actuator est lie a la
+# boucle locale du conteneur et n'est utilise que par la healthcheck Docker.
+server:
+  address: 127.0.0.1
+
+spring:
+  kafka:
+    properties:
+      security.protocol: SSL
