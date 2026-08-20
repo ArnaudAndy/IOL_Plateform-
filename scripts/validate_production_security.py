@@ -212,6 +212,8 @@ def validate_main(config: dict, errors: list[str]) -> None:
     for engine in ("moteur_universel.py", "spark_etl.py", "mapping_engine.py"):
         require(errors, engine not in consumer_volumes,
                 f"{engine} doit venir de l image immuable, pas d un montage hote")
+    require(errors, "/opt/iol/project" not in consumer_volumes,
+            "Le projet Hop doit venir de l image immuable, pas d un montage hote")
 
 
 def validate_source_gateway(config: dict, errors: list[str]) -> None:
@@ -307,6 +309,22 @@ def validate_openhim(config: dict, errors: list[str]) -> None:
     require(errors, openid.startswith("https://"), "OpenHIM doit deleguer l authentification a Keycloak HTTPS")
 
 
+def validate_shared_networks(main_config: dict, openhim_config: dict, errors: list[str]) -> None:
+    """OpenHIM est une stack Compose distincte, mais ne doit jamais etre isole.
+
+    Nginx et les mediateurs communiquent par les deux reseaux nommes de la
+    plateforme. Une valeur par defaut liee au nom du projet Compose pouvait les
+    faire diverger silencieusement entre preproduction et production.
+    """
+    main_networks = main_config.get("networks", {})
+    openhim_networks = openhim_config.get("networks", {})
+    for network_name in ("iol-internal", "iol-egress"):
+        main_name = str(main_networks.get(network_name, {}).get("name", ""))
+        openhim_name = str(openhim_networks.get(network_name, {}).get("name", ""))
+        require(errors, bool(main_name) and main_name == openhim_name,
+                f"OpenHIM et la stack principale doivent partager le reseau {network_name}")
+
+
 def validate_files(errors: list[str]) -> None:
     realm = json.loads((BACKEND / "keycloak/realm/iol-realm.json").read_text(encoding="utf-8"))
     require(errors, realm.get("sslRequired") == "all", "Le realm Keycloak doit imposer SSL")
@@ -367,6 +385,7 @@ def main() -> int:
     validate_source_gateway(main_config, errors)
     validate_source_gateway_policy(errors)
     validate_openhim(openhim_config, errors)
+    validate_shared_networks(main_config, openhim_config, errors)
     validate_files(errors)
 
     if errors:

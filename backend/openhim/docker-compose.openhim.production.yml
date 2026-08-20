@@ -150,7 +150,7 @@ services:
 networks:
   iol-egress:
     external: true
-    name: "${IOL_EGRESS_DOCKER_NETWORK:-backend_iol-egress}"
+    name: "${IOL_EGRESS_DOCKER_NETWORK:-iol-egress}"
 
 secrets:
   mongodb-openhim-password: {file: ../secrets/mongodb-openhim-password}

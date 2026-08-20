@@ -359,11 +359,8 @@ services:
       SPARK_TLS_KEYSTORE_PATH: "/run/tls/pipeline-consumer.p12"
       SPARK_CONF_DIR: "/tmp/iol/spark-conf"
     volumes:
-      - ${HOP_HOST_PROJECT_HOME:-../hop-project}:/opt/iol/project:ro
-      # Les moteurs Python ne sont PLUS montes depuis l'hote: ils sont embarques
-      # dans l'image immuable, donc couverts par la signature cosign, les SBOM
-      # et le scan Trivy. Les remonter ici reintroduirait du code de
-      # transformation non trace et insensible au retour arriere.
+      # Le projet Hop et les moteurs Python sont inclus dans l'image immuable.
+      # Aucun chemin de projet Hop n'est attendu sur le serveur de production.
       - iol-hop-temp:/tmp/iol
       - ./secrets/runtime-tls/pipeline-consumer:/run/tls:ro
     secrets:
@@ -1003,12 +1000,14 @@ volumes:
 
 networks:
   iol-internal:
+    name: ${IOL_DOCKER_NETWORK:-iol-internal}
     driver: bridge
     internal: true
     ipam:
       config:
         - subnet: 172.30.0.0/24
   iol-egress:
+    name: ${IOL_EGRESS_DOCKER_NETWORK:-iol-egress}
     driver: bridge
   iol-vault:
     external: true

@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
-ENV_FILE="${IOL_PRODUCTION_ENV_FILE:-${BACKEND_DIR}/.env.production}"
+ENV_FILE="${IOL_ENV_FILE:-${IOL_PRODUCTION_ENV_FILE:-${BACKEND_DIR}/.env.production}}"
 
 if [[ ! -s "${ENV_FILE}" ]]; then
   printf 'Fichier de production absent: %s\n' "${ENV_FILE}" >&2

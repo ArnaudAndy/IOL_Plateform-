@@ -1,5 +1,9 @@
 # Runbook de mise en service
 
+> Le parcours de demarrage, les adresses publiques, les ports Nginx et les
+> commandes unifiees sont dans le [Guide de deploiement](GUIDE_DEPLOIEMENT.md).
+> Ce document conserve les criteres de qualification, reprise et `GO / NO-GO`.
+
 Ce document décrit la procédure pratique à suivre pour mettre en service le dépôt dans un environnement cible. Il est volontairement conservé à un niveau simple, car la topologie complète de production n’a pas encore été entièrement qualifiée ici.
 
 ## 1. État actuel
@@ -16,14 +20,13 @@ La plateforme est donc opérationnelle pour des usages de préproduction et d’
 
 Avant toute mise en service :
 1. préparer un environnement Linux/Windows avec Docker Compose fonctionnel ;
-2. générer les secrets de fichiers avec `scripts/generate-production-secrets.sh`,
-   puis provisionner les identités Vault avec
-   `scripts/bootstrap-production-vault.sh` ;
-3. vérifier que le frontend est construit avant d’exposer l’interface ;
-4. générer la PKI avec `scripts/generate-production-pki.sh` et vérifier la
-   connectivité mTLS entre les services internes ;
-5. exécuter le preflight avant toute création de conteneur :
-   `scripts/preflight-production.sh`.
+2. générer ou injecter les secrets avec `ops/secrets/generate-runtime-secrets.sh`
+   en préproduction, puis provisionner Vault selon la procédure de sécurité ;
+3. construire et signer les images de release, y compris le projet Hop embarqué ;
+4. générer la PKI de préproduction avec `ops/pki/generate-preprod-pki.sh`, ou
+   injecter la PKI organisationnelle en production ;
+5. exécuter le précontrôle avant toute création de conteneur :
+   `ops/production/preflight.sh`.
 
 ### Premier bootstrap Keycloak
 
@@ -37,11 +40,7 @@ Pour la premiere installation uniquement :
 
 ```bash
 cd backend
-docker compose --env-file .env.production \
-  -f docker-compose.yml -f docker-compose.production.yml \
-  --profile bootstrap up --abort-on-container-exit keycloak-bootstrap
-docker compose --env-file .env.production \
-  -f docker-compose.yml -f docker-compose.production.yml up -d
+bash ops/production/deploy.sh --environment production --bootstrap
 ```
 
 Lors des releases suivantes, executer uniquement la seconde commande. Les
@@ -52,12 +51,7 @@ verifient ensuite l'obtention d'un jeton avec leurs identites de service.
 
 ```bash
 cd backend
-cp .env.example .env
-cd ../frontend
-npm ci
-npm run build
-cd ../backend
-docker compose up -d
+bash ops/production/deploy.sh --environment production
 ```
 
 ## 4. Vérification minimale

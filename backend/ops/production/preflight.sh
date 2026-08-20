@@ -4,7 +4,7 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 ROOT_DIR="$(cd -- "${BACKEND_DIR}/.." && pwd)"
-ENV_FILE="${IOL_PRODUCTION_ENV_FILE:-${BACKEND_DIR}/.env.production}"
+ENV_FILE="${IOL_ENV_FILE:-${IOL_PRODUCTION_ENV_FILE:-${BACKEND_DIR}/.env.production}}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 fail() {
@@ -18,11 +18,22 @@ set -a
 source "${ENV_FILE}"
 set +a
 
+case "${IOL_DEPLOYMENT_ENV:-}" in
+  preproduction|production) ;;
+  *) fail 'IOL_DEPLOYMENT_ENV doit valoir preproduction ou production' ;;
+esac
 [[ "${IOL_RELEASE_TAG:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{2,127}$ ]] \
   || fail 'IOL_RELEASE_TAG doit etre un tag immuable explicite'
 [[ "${IOL_RELEASE_TAG}" != *latest* && "${IOL_RELEASE_TAG}" != *REPLACE* ]] \
   || fail 'tag mutable ou factice interdit'
 [[ "${IOL_PUBLIC_URL:-}" == https://* ]] || fail 'IOL_PUBLIC_URL doit utiliser HTTPS'
+[[ "${IOL_PUBLIC_URL}" == "https://${IOL_PUBLIC_HOSTNAME:-}" ]] \
+  || fail 'IOL_PUBLIC_URL doit correspondre exactement a https://IOL_PUBLIC_HOSTNAME'
+for network_variable in IOL_DOCKER_NETWORK IOL_EGRESS_DOCKER_NETWORK; do
+  network_value="${!network_variable:-}"
+  [[ "${network_value}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{1,127}$ ]] \
+    || fail "${network_variable} est obligatoire et doit etre un nom Docker valide"
+done
 [[ "${VAULT_ADDR:-}" == https://* ]] || fail 'VAULT_ADDR doit utiliser HTTPS'
 [[ "${RUSTFS_VAULT_ADDR:-}" == https://* ]] || fail 'RUSTFS_VAULT_ADDR doit utiliser HTTPS'
 [[ -n "${IOL_INITIAL_ADMIN_USERNAME:-}" && -n "${IOL_INITIAL_ADMIN_EMAIL:-}" ]] \
@@ -66,9 +77,14 @@ grep -Eq '^[[:space:]]*seal[[:space:]]+"' "${BACKEND_DIR}/vault/config/seal.hcl"
 
 certificates=(
   nginx/nginx.crt api-core/api-core.crt source-gateway/source-gateway.crt \
-  pipeline-consumer/pipeline-consumer.crt
+  pipeline-consumer/pipeline-consumer.crt iol-mediator/iol-mediator.crt \
+  iol-fhir-mediator/iol-fhir-mediator.crt \
+  iol-iso20022-mediator/iol-iso20022-mediator.crt \
+  iol-edfi-mediator/iol-edfi-mediator.crt openhim/openhim.crt
   postgres/postgres.crt mongodb/mongodb.crt kafka-1/kafka.crt
-  rustfs/rustfs.crt keycloak/keycloak.crt vault-renewer/vault-renewer.crt
+  rustfs/rustfs.crt rustfs-lb/rustfs-lb.crt keycloak/keycloak.crt \
+  spark-master/spark-master.crt spark-worker/spark-worker.crt \
+  vault-renewer/vault-renewer.crt
 )
 for certificate in "${certificates[@]}"; do
   certificate_path="${BACKEND_DIR}/secrets/runtime-tls/${certificate}"
@@ -76,6 +92,15 @@ for certificate in "${certificates[@]}"; do
   openssl x509 -checkend 2592000 -noout -in "${certificate_path}" >/dev/null \
     || fail "certificat expire dans moins de 30 jours: ${certificate}"
 done
+
+hop_project_dir="${ROOT_DIR}/hop-project"
+[[ -f "${hop_project_dir}/project-config.json" ]] \
+  || fail 'projet Hop absent: hop-project/project-config.json'
+hop_workflow="${HOP_WORKFLOW_FILE:-wf_main_ingestion.hwf}"
+[[ -f "${hop_project_dir}/Projet ETL/Global_Config/${hop_workflow}" ]] \
+  || fail "workflow Hop absent de la release: ${hop_workflow}"
+[[ -f "${hop_project_dir}/Projet ETL/Global_Config/read_config.hpl" ]] \
+  || fail 'pipeline Hop obligatoire absent: read_config.hpl'
 
 network_name="${IOL_VAULT_DOCKER_NETWORK:-iol-vault-client}"
 docker network inspect "${network_name}" >/dev/null 2>&1 \

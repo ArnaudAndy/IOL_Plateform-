@@ -241,9 +241,7 @@ services:
     expose:
       - "8085"
     volumes:
-      - ${HOP_HOST_PROJECT_HOME:-../hop-project}:/opt/iol/project:ro
-      # Les moteurs ne sont plus montes: ils vivent dans l'image, donc signes,
-      # scannes et solidaires du tag de version.
+      # Le projet Hop et les moteurs sont embarques dans l'image versionnee.
       - iol-hop-temp:/tmp/iol                      # fichiers JSON temporaires
     environment:
       MONGODB_URI:               "mongodb://mongodb:27017/iol_metadata"
@@ -532,4 +530,7 @@ volumes:
 
 networks:
   iol-internal:
+    # Nom explicite partage avec la stack OpenHIM. En production, chaque
+    # environnement fournit sa propre valeur dans son fichier .env.
+    name: ${IOL_DOCKER_NETWORK:-iol-internal}
     driver: bridge

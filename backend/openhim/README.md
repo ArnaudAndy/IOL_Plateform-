@@ -18,6 +18,11 @@ Spring Boot 3.4 and Java 17.
 
 ## Start
 
+> Les commandes de cette section servent au developpement local. En
+> preproduction et en production, utiliser le point d'entree unique decrit
+> dans [le guide de deploiement](../../docs/GUIDE_DEPLOIEMENT.md), qui emploie
+> le meme fichier d'environnement que la stack principale.
+
 From `backend/`:
 
 ```powershell

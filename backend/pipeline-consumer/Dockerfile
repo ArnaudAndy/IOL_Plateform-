@@ -35,6 +35,12 @@ RUN chmod +x /app/docker-entrypoint.sh
 COPY --from=hop-runtime /opt/hop /opt/hop
 COPY --from=hop-java /opt/java/openjdk /opt/iol/java21
 
+# Le projet Hop fait partie de la release : aucun dossier d'hote ni installation
+# de Hop n'est requis sur le serveur cible. Les modifications d'un workflow
+# passent donc par la construction d'une nouvelle image versionnee.
+COPY hop-project/ /opt/iol/project/
+RUN chmod -R a=rX /opt/iol/project
+
 # Moteurs d'execution, embarques dans l'image et non plus montes depuis l'hote.
 # Ils sont ainsi couverts par la signature cosign, les SBOM et le scan Trivy, et
 # un retour arriere de version les ramene avec le reste.
@@ -55,7 +61,8 @@ ENV APP_KAFKA_DLQ_TOPIC=iol.pipeline.commands.dlq
 ENV HOP_HOME=/opt/hop
 ENV HOP_JAVA_HOME=/opt/iol/java21
 ENV HOP_RUN_CONFIG=local
-ENV HOP_PIPELINES_DIR=/opt/hop/pipelines/iol
+ENV HOP_PROJECT_HOME=/opt/iol/project
+ENV HOP_PIPELINES_DIR="/opt/iol/project/Projet ETL/Global_Config"
 ENV HOP_TEMP_DIR=/tmp/iol
 ENV SPARK_SUBMIT_PATH=/opt/spark/bin/spark-submit
 ENV SPARK_JDBC_JARS_DIR=/opt/iol/jdbc

@@ -342,4 +342,5 @@ volumes:
 networks:
   iol-internal:
     external: true
-    name: "${IOL_DOCKER_NETWORK:-backend_iol-internal}"
+    # Cree par la stack principale avant le lancement d'OpenHIM.
+    name: "${IOL_DOCKER_NETWORK:-iol-internal}"
