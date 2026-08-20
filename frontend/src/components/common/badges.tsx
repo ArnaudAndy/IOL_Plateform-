@@ -10,10 +10,9 @@ export function ExecutionStatusBadge({ status }: { status: ExecutionStatus }) {
     SUCCESS: { label: executionStatusLabel('SUCCESS'), cls: 'bg-success/10 text-success border-success/30' },
     FAILED: { label: executionStatusLabel('FAILED'), cls: 'bg-destructive/10 text-destructive border-destructive/30' },
     DELIVERED: { label: executionStatusLabel('DELIVERED'), cls: 'bg-success/10 text-success border-success/30' },
-    PENDING: { label: executionStatusLabel('PENDING'), cls: 'bg-muted text-muted-foreground border-border' },
-    CANCELLED: { label: executionStatusLabel('CANCELLED'), cls: 'bg-muted text-muted-foreground border-border' },
   }
-  const s = map[status] || map.PENDING
+  // Repli neutre si le serveur renvoie un jour un statut inconnu du client.
+  const s = map[status] || { label: String(status), cls: 'bg-muted text-muted-foreground border-border' }
   return (
     <span className={cn('inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs font-medium', s.cls)}>
       {s.dot && <span className="h-1.5 w-1.5 rounded-full bg-current pulse-dot" />}

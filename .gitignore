@@ -28,3 +28,9 @@ reports/
 /scripts/*
 !/scripts/validate_contracts.py
 !/scripts/validate_production_security.py
+!/scripts/generate_iol_drawio.mjs
+!/scripts/validate_iol_drawio.ps1
+
+.IOL_Diagrammes_v2.drawio
+.IOL_Diagrammes_v2.drawio.avant-normalisation
+.IOL_Diagrammes_v2.drawio.avant-revision

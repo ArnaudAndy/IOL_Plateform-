@@ -12,7 +12,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogClose } from '@/components/ui/dialog'
 import { Badge } from '@/components/ui/badge'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { DataTable, THead, TBody, Th, Tr, Td } from '@/components/common/data-table'
 import { ConfirmDialog } from '@/components/common/confirm-dialog'
 import { useToast } from '@/hooks/use-toast'
 import type { DestinationConnectionDto } from '@/lib/api/types'
@@ -122,36 +122,33 @@ export function ConnectionsView() {
           action={<Button onClick={openCreate}><Plus className="mr-1.5 h-4 w-4" /> {t('common.create')}</Button>}
         />
       ) : (
-        <div className="overflow-hidden rounded-md border border-border bg-card">
-          <div className="overflow-x-auto">
-            <Table className="min-w-[760px]">
-              <TableHeader className="bg-muted/40">
-                <TableRow>
-                  <TableHead>{t('common.name')}</TableHead>
-                  <TableHead>{t('common.type')}</TableHead>
-                  <TableHead>{t('common.host')}</TableHead>
-                  <TableHead>{t('common.database')}</TableHead>
-                  <TableHead>{t('common.username')}</TableHead>
-                  <TableHead className="w-[132px] text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
+        <div className="space-y-2">
+          <DataTable minWidth={760}>
+              <THead>
+                  <Th>{t('common.name')}</Th>
+                  <Th>{t('common.type')}</Th>
+                  <Th>{t('common.host')}</Th>
+                  <Th>{t('common.database')}</Th>
+                  <Th>{t('common.username')}</Th>
+                  <Th align="right" className="w-[132px]">Actions</Th>
+              </THead>
+              <TBody>
                 {pageConnections.map((c) => {
                   const dbType = normalizeDbType(c.dbType)
                   return (
-                    <TableRow key={c.id}>
-                      <TableCell className="font-medium">{c.name}</TableCell>
-                      <TableCell>
+                    <Tr key={c.id}>
+                      <Td strong>{c.name}</Td>
+                      <Td>
                         <Badge variant="outline" className={`text-[10px] ${DB_TYPE_STYLES[dbType] || ''}`}>
                           {dbType}
                         </Badge>
-                      </TableCell>
-                      <TableCell className="font-mono text-xs">
+                      </Td>
+                      <Td muted className="font-mono text-xs">
                         {dbType === 'SQLITE' ? 'Local' : `${c.host || '—'}${c.port ? `:${c.port}` : ''}`}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs">{c.database || '—'}</TableCell>
-                      <TableCell className="font-mono text-xs">{c.username || '—'}</TableCell>
-                      <TableCell>
+                      </Td>
+                      <Td muted className="font-mono text-xs">{c.database || '—'}</Td>
+                      <Td muted className="font-mono text-xs">{c.username || '—'}</Td>
+                      <Td className="py-2">
                         <div className="flex justify-end gap-1">
                           <Button
                             size="icon"
@@ -178,14 +175,13 @@ export function ConnectionsView() {
                             <Trash2 className="h-3.5 w-3.5" />
                           </Button>
                         </div>
-                      </TableCell>
-                    </TableRow>
+                      </Td>
+                    </Tr>
                   )
                 })}
-              </TableBody>
-            </Table>
-          </div>
-          <div className="flex flex-col gap-3 border-t border-border px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+              </TBody>
+          </DataTable>
+          <div className="flex flex-col gap-3 pt-1 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-xs text-muted-foreground">
               {Math.min((activePage - 1) * pageSize + 1, connections.length)}–{Math.min(activePage * pageSize, connections.length)} sur {connections.length}
             </p>

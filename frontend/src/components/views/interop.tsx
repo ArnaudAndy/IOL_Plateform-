@@ -5,6 +5,7 @@ import { Search, Link2, AlertCircle, ArrowDownToLine, Activity, Send, Loader2, E
 import { interopTestService, logsService, standardService, workflowService } from '@/lib/api/services'
 import { describeError } from '@/lib/api/client'
 import { PageHeader, LoadingState, ErrorState, EmptyState } from '@/components/common/states'
+import { DataTable, THead, TBody, Th, Tr, Td } from '@/components/common/data-table'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -283,46 +284,42 @@ export function InteropView() {
         : (interopQ.data ?? []).length === 0 ? (
           <EmptyState title="Aucune réception externe" description="Les données envoyées par des systèmes externes apparaîtront ici." icon={ArrowDownToLine} />
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-border">
-            <table className="w-full min-w-[760px] text-sm">
-              <thead className="bg-muted/40">
-                <tr className="text-left text-xs uppercase tracking-wide text-muted-foreground">
-                  <th className="px-3 py-2">Statut</th>
-                  <th className="px-3 py-2">Traitement</th>
-                  <th className="px-3 py-2">Début</th>
-                  <th className="px-3 py-2">Durée</th>
-                  <th className="px-3 py-2">{TECH_LABELS.correlationId}</th>
-                   <th className="px-3 py-2">Par</th>
-                   <th className="px-3 py-2"></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {(interopQ.data ?? []).map((l) => (
-                  <tr key={l.id} className="hover:bg-muted/30">
-                    <td className="px-3 py-2"><ExecutionStatusBadge status={l.status} /></td>
-                    <td className="px-3 py-2 font-medium">{l.workflowName || l.workflowId}</td>
-                    <td className="px-3 py-2 text-muted-foreground">{formatRelative(l.startTime)}</td>
-                    <td className="px-3 py-2">{formatDuration(l.durationMs)}</td>
-                    <td className="px-3 py-2 font-mono text-[11px]">{l.correlationId?.slice(0, 12) || '—'}</td>
-                     <td className="px-3 py-2 text-muted-foreground">{l.triggeredBy || '—'}</td>
-                     <td className="px-3 py-2 text-right">
-                       {l.workflowId && (
-                         <Button
-                           size="icon"
-                           variant="ghost"
-                           title="Ouvrir le traitement"
-                           aria-label="Ouvrir le traitement"
-                           onClick={() => navigate('workflow-detail', { id: l.workflowId })}
-                         >
-                           <Eye className="h-4 w-4" />
-                         </Button>
-                       )}
-                     </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DataTable minWidth={760}>
+            <THead>
+              <Th>Traitement</Th>
+              <Th>Statut</Th>
+              <Th>Par</Th>
+              <Th align="right">{TECH_LABELS.correlationId}</Th>
+              <Th align="right">Début</Th>
+              <Th align="right">Durée</Th>
+              <Th align="right"></Th>
+            </THead>
+            <TBody>
+              {(interopQ.data ?? []).map((l) => (
+                <Tr key={l.id}>
+                  <Td strong>{l.workflowName || l.workflowId}</Td>
+                  <Td><ExecutionStatusBadge status={l.status} /></Td>
+                  <Td muted>{l.triggeredBy || '—'}</Td>
+                  <Td numeric className="font-mono text-xs">{l.correlationId?.slice(0, 12) || '—'}</Td>
+                  <Td muted numeric>{formatRelative(l.startTime)}</Td>
+                  <Td muted numeric>{formatDuration(l.durationMs)}</Td>
+                  <Td align="right" className="py-2">
+                    {l.workflowId && (
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        title="Ouvrir le traitement"
+                        aria-label="Ouvrir le traitement"
+                        onClick={() => navigate('workflow-detail', { id: l.workflowId })}
+                      >
+                        <Eye className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </Td>
+                </Tr>
+              ))}
+            </TBody>
+          </DataTable>
         )}
       </div>
 

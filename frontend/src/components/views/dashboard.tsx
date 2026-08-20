@@ -1,10 +1,25 @@
 
 import { useQuery } from '@tanstack/react-query'
-import { Link2, Activity, ArrowDownToLine, Workflow as WorkflowIcon, AlertTriangle, CheckCircle2, Clock } from 'lucide-react'
+import {
+  Link2,
+  ArrowDownToLine,
+  Network,
+  PlayCircle,
+  CircleCheck,
+  CircleAlert,
+  Clock,
+  BookMarked,
+  Plug,
+  Terminal,
+  Bot,
+  ChevronRight,
+  type LucideIcon,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { workflowService, logsService } from '@/lib/api/services'
 import { describeError } from '@/lib/api/client'
 import { PageHeader, LoadingState, ErrorState, EmptyState } from '@/components/common/states'
+import { DataTable, THead, TBody, Th, Tr, Td } from '@/components/common/data-table'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { useNavStore } from '@/stores/nav-store'
@@ -65,27 +80,27 @@ export function DashboardView() {
         <KpiCard
           title={t('dashboard.kpiConfigured')}
           value={workflows.length}
-          icon={<WorkflowIcon className="h-4 w-4" />}
+          icon={Network}
           onClick={() => navigate('workflows')}
         />
         <KpiCard
           title={t('dashboard.kpiRunning')}
           value={runningCount}
-          icon={<Activity className="h-4 w-4" />}
+          icon={PlayCircle}
           tone="info"
           onClick={() => navigate('executions')}
         />
         <KpiCard
           title={t('dashboard.kpiSuccess')}
           value={successCount}
-          icon={<CheckCircle2 className="h-4 w-4" />}
+          icon={CircleCheck}
           tone="success"
           onClick={() => navigate('executions')}
         />
         <KpiCard
           title={t('dashboard.kpiFailed')}
           value={failedCount}
-          icon={<AlertTriangle className="h-4 w-4" />}
+          icon={CircleAlert}
           tone="danger"
           onClick={() => navigate('executions')}
         />
@@ -144,76 +159,87 @@ export function DashboardView() {
             icon={Clock}
           />
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-border">
-            <table className="w-full text-sm">
-              <thead className="bg-muted/40">
-                <tr className="text-left text-xs uppercase tracking-wide text-muted-foreground">
-                  <th className="px-3 py-2 font-medium">{t('common.status')}</th>
-                  <th className="px-3 py-2 font-medium">{t('common.workflow')}</th>
-                  <th className="px-3 py-2 font-medium">Direction</th>
-                  <th className="px-3 py-2 font-medium">{t('common.triggeredBy')}</th>
-                  <th className="px-3 py-2 font-medium">{t('common.start')}</th>
-                  <th className="px-3 py-2 font-medium">{t('common.duration')}</th>
-                  <th className="px-3 py-2 font-medium">{TECH_LABELS.correlationId}</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {recentLogs.map((log) => (
-                  <tr
-                    key={log.id}
-                    className="cursor-pointer hover:bg-muted/30"
-                    onClick={() => log.workflowId && navigate('workflow-detail', { id: log.workflowId, tab: 'executions' })}
-                  >
-                    <td className="px-3 py-2"><ExecutionStatusBadge status={log.status} /></td>
-                    <td className="px-3 py-2 font-medium">{log.workflowName || log.workflowId || '—'}</td>
-                    <td className="px-3 py-2"><DirectionBadge direction={log.direction} /></td>
-                    <td className="px-3 py-2 text-muted-foreground">{log.triggeredBy || '—'}</td>
-                    <td className="px-3 py-2 text-muted-foreground">{formatRelative(log.startTime)}</td>
-                    <td className="px-3 py-2 text-muted-foreground">{formatDuration(log.durationMs)}</td>
-                    <td className="px-3 py-2 font-mono text-[11px] text-muted-foreground">{log.correlationId?.slice(0, 8) || '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DataTable minWidth={880}>
+            <THead>
+              <Th>{t('common.workflow')}</Th>
+              <Th>{t('common.status')}</Th>
+              <Th>Direction</Th>
+              <Th>{t('common.triggeredBy')}</Th>
+              <Th align="right">{t('common.start')}</Th>
+              <Th align="right">{t('common.duration')}</Th>
+              <Th align="right">{TECH_LABELS.correlationId}</Th>
+            </THead>
+            <TBody>
+              {recentLogs.map((log) => (
+                <Tr
+                  key={log.id}
+                  onClick={() => log.workflowId && navigate('workflow-detail', { id: log.workflowId, tab: 'executions' })}
+                >
+                  <Td strong>{log.workflowName || log.workflowId || '—'}</Td>
+                  <Td><ExecutionStatusBadge status={log.status} /></Td>
+                  <Td><DirectionBadge direction={log.direction} /></Td>
+                  <Td muted>{log.triggeredBy || '—'}</Td>
+                  <Td muted numeric>{formatRelative(log.startTime)}</Td>
+                  <Td muted numeric>{formatDuration(log.durationMs)}</Td>
+                  <Td muted numeric className="font-mono text-xs">{log.correlationId?.slice(0, 8) || '—'}</Td>
+                </Tr>
+              ))}
+            </TBody>
+          </DataTable>
         )}
       </div>
 
       {/* Quick actions */}
       <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <QuickAction label={t('nav.items.standards')} description={t('dashboard.quickStandards')} onClick={() => navigate('standards')} />
-        <QuickAction label={t('nav.items.connections')} description={t('dashboard.quickConnections')} onClick={() => navigate('connections')} />
-        <QuickAction label={t('nav.items.sqlWorkbench')} description={t('dashboard.quickSql')} onClick={() => navigate('sql-workbench')} />
-        <QuickAction label={t('nav.items.aiAssistant')} description={t('dashboard.quickAi')} onClick={() => navigate('ai-assistant')} />
+        <QuickAction icon={BookMarked} label={t('nav.items.standards')} description={t('dashboard.quickStandards')} onClick={() => navigate('standards')} />
+        <QuickAction icon={Plug} label={t('nav.items.connections')} description={t('dashboard.quickConnections')} onClick={() => navigate('connections')} />
+        <QuickAction icon={Terminal} label={t('nav.items.sqlWorkbench')} description={t('dashboard.quickSql')} onClick={() => navigate('sql-workbench')} />
+        <QuickAction icon={Bot} label={t('nav.items.aiAssistant')} description={t('dashboard.quickAi')} onClick={() => navigate('ai-assistant')} />
       </div>
     </div>
   )
 }
 
+// Palette par tonalite : la valeur reste en couleur du texte principal (plus
+// sobre), seule la pastille d'icone porte la couleur semantique.
+const KPI_TONES = {
+  default: { icon: 'bg-muted text-foreground', accent: 'bg-border' },
+  info: { icon: 'bg-info/12 text-info', accent: 'bg-info' },
+  success: { icon: 'bg-success/12 text-success', accent: 'bg-success' },
+  danger: { icon: 'bg-destructive/12 text-destructive', accent: 'bg-destructive' },
+  warning: { icon: 'bg-warning/15 text-warning', accent: 'bg-warning' },
+} as const
+
 function KpiCard({
-  title, value, icon, tone = 'default', onClick,
+  title, value, icon: Icon, tone = 'default', hint, onClick,
 }: {
   title: string
   value: number | string
-  icon: React.ReactNode
-  tone?: 'default' | 'info' | 'success' | 'danger' | 'warning'
+  icon: LucideIcon
+  tone?: keyof typeof KPI_TONES
+  hint?: string
   onClick?: () => void
 }) {
-  const toneCls = {
-    default: 'text-foreground',
-    info: 'text-info',
-    success: 'text-success',
-    danger: 'text-destructive',
-    warning: 'text-warning',
-  }[tone]
+  const palette = KPI_TONES[tone]
   return (
-    <Card className="cursor-pointer transition-colors hover:bg-muted/40" onClick={onClick}>
-      <CardContent className="p-4">
-        <div className="flex items-center justify-between">
-          <p className="text-xs text-muted-foreground">{title}</p>
-          <span className={toneCls}>{icon}</span>
+    <Card
+      className="group relative cursor-pointer overflow-hidden transition-shadow hover:shadow-md"
+      onClick={onClick}
+    >
+      {/* Filet de couleur : identifie le KPI sans surcharger la carte. */}
+      <span className={`absolute inset-x-0 top-0 h-0.5 ${palette.accent}`} aria-hidden="true" />
+      <CardContent className="flex items-center gap-4 p-5">
+        <span
+          className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-lg ${palette.icon}`}
+          aria-hidden="true"
+        >
+          <Icon className="h-6 w-6" strokeWidth={1.75} />
+        </span>
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium text-muted-foreground">{title}</p>
+          <p className="mt-0.5 text-3xl font-semibold leading-none tracking-tight text-foreground">{value}</p>
+          {hint && <p className="mt-1.5 truncate text-xs text-muted-foreground">{hint}</p>}
         </div>
-        <p className={`mt-2 text-2xl font-semibold ${toneCls}`}>{value}</p>
       </CardContent>
     </Card>
   )
@@ -235,12 +261,27 @@ function MiniStat({ label, value, tone = 'default' }: { label: string; value: nu
   )
 }
 
-function QuickAction({ label, description, onClick }: { label: string; description: string; onClick: () => void }) {
+function QuickAction({
+  label, description, icon: Icon, onClick,
+}: {
+  label: string
+  description: string
+  icon: LucideIcon
+  onClick: () => void
+}) {
   return (
-    <Card className="cursor-pointer transition-colors hover:bg-muted/40" onClick={onClick}>
-      <CardContent className="p-4">
-        <p className="text-sm font-medium">{label}</p>
-        <p className="mt-1 text-xs text-muted-foreground">{description}</p>
+    <Card className="group cursor-pointer transition-shadow hover:shadow-md" onClick={onClick}>
+      <CardContent className="flex items-start gap-3 p-4">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground" aria-hidden="true">
+          <Icon className="h-5 w-5" strokeWidth={1.75} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="flex items-center gap-1 text-sm font-medium">
+            {label}
+            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">{description}</p>
+        </div>
       </CardContent>
     </Card>
   )

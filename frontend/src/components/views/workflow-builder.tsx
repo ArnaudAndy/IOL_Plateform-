@@ -14,6 +14,7 @@ import {
 import { describeError, ApiRequestError } from '@/lib/api/client'
 import { toBackendWorkflow } from '@/lib/api/mappers'
 import { PageHeader, LoadingState, ErrorState, EmptyState, InlineError } from '@/components/common/states'
+import { DataTable, THead, TBody, Th, Tr, Td } from '@/components/common/data-table'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -1174,25 +1175,22 @@ function WorkflowBuilderForm({ id, initialData }: { id?: string; initialData?: W
                 <p className="text-xs text-muted-foreground">
                   {t('builder.fieldsInstruction')}
                 </p>
-                <div className="overflow-x-auto rounded-md border border-border">
-                  <table className="w-full text-xs">
-                    <thead className="bg-muted/40">
-                      <tr className="text-left text-[10px] uppercase tracking-wide text-muted-foreground">
-                        <th className="px-2 py-2">{t('fields.extract')}</th>
-                        <th className="px-2 py-2">{t('fields.targetName')}</th>
-                        <th className="px-2 py-2">{t('fields.originalName')}</th>
-                        <th className="px-2 py-2">{t('common.type')}</th>
-                        <th className="px-2 py-2">{t('fields.alias')}</th>
-                        <th className="px-2 py-2">{t('fields.semanticTerm')}</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
+                <DataTable minWidth={860}>
+                  <THead>
+                    <Th>{t('fields.extract')}</Th>
+                    <Th>{t('fields.targetName')}</Th>
+                    <Th>{t('fields.originalName')}</Th>
+                    <Th>{t('common.type')}</Th>
+                    <Th>{t('fields.alias')}</Th>
+                    <Th>{t('fields.semanticTerm')}</Th>
+                  </THead>
+                  <TBody>
                       {(currentSource.fields || []).map((f, i) => {
                         const standard = standardsQ.data?.find((s) => s.id === wf.standardId)
                         const terms = standard?.terms || []
                         return (
-                          <tr key={i}>
-                            <td className="px-2 py-1.5">
+                          <Tr key={i}>
+                            <Td className="py-2">
                               <Checkbox
                                 checked={!!f.selected}
                                 onCheckedChange={(v) => {
@@ -1201,8 +1199,8 @@ function WorkflowBuilderForm({ id, initialData }: { id?: string; initialData?: W
                                   updateSource(activeSourceIdx, { fields })
                                 }}
                               />
-                            </td>
-                            <td className="px-2 py-1.5">
+                            </Td>
+                            <Td className="py-2">
                               <Input
                                 value={f.name}
                                 onChange={(e) => {
@@ -1212,10 +1210,10 @@ function WorkflowBuilderForm({ id, initialData }: { id?: string; initialData?: W
                                 }}
                                 className="h-7 font-mono text-xs"
                               />
-                            </td>
-                            <td className="px-2 py-1.5 text-muted-foreground">{f.originalName || '—'}</td>
-                            <td className="px-2 py-1.5 text-muted-foreground">{f.type || '—'}</td>
-                            <td className="px-2 py-1.5">
+                            </Td>
+                            <Td muted>{f.originalName || '—'}</Td>
+                            <Td muted>{f.type || '—'}</Td>
+                            <Td className="py-2">
                               <Input
                                 value={f.alias || ''}
                                 onChange={(e) => {
@@ -1226,8 +1224,8 @@ function WorkflowBuilderForm({ id, initialData }: { id?: string; initialData?: W
                                 className="h-7 text-xs"
                                 placeholder="—"
                               />
-                            </td>
-                            <td className="px-2 py-1.5">
+                            </Td>
+                            <Td className="py-2">
                               <Select
                                 value={f.semanticTerm || ''}
                                 onValueChange={(v) => {
@@ -1244,13 +1242,12 @@ function WorkflowBuilderForm({ id, initialData }: { id?: string; initialData?: W
                                   {terms.length === 0 && <SelectItem value="_none_" disabled className="text-xs">{t('builder.noTerm')}</SelectItem>}
                                 </SelectContent>
                               </Select>
-                            </td>
-                          </tr>
+                            </Td>
+                          </Tr>
                         )
                       })}
-                    </tbody>
-                  </table>
-                </div>
+                  </TBody>
+                </DataTable>
               </div>
             )}
           </CardContent>

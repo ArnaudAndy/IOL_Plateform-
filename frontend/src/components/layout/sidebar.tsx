@@ -28,6 +28,7 @@ import { Button } from '@/components/ui/button'
 import { useNavStore, type ViewId } from '@/stores/nav-store'
 import { useAuthStore } from '@/stores/auth-store'
 import { RoleBadge } from '@/components/common/badges'
+import { IolLogo } from '@/components/common/iol-logo'
 import { ConfirmDialog } from '@/components/common/confirm-dialog'
 import { useMounted } from '@/lib/format'
 
@@ -83,16 +84,14 @@ export function AppSidebar({ mobile = false, onNavigate }: { mobile?: boolean; o
 
   return (
     <aside className={cn(
-      'h-full w-64 flex-col bg-sidebar',
+      'h-full w-64 flex-col bg-sidebar text-sidebar-foreground',
       mobile ? 'flex w-full' : 'hidden border-r border-sidebar-border md:flex',
     )}>
       {/* Brand */}
       <div className="flex h-14 items-center gap-2.5 border-b border-sidebar-border px-4">
-        <div className="flex h-8 w-8 items-center justify-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground">
-          <Workflow className="h-4 w-4" />
-        </div>
+        <IolLogo size={32} className="rounded-md shadow-sm" />
         <div className="flex flex-col leading-tight">
-          <span className="text-sm font-semibold text-sidebar-foreground">IOL ETL</span>
+          <span className="text-sm font-semibold tracking-tight text-sidebar-foreground">IOL ETL</span>
           <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Admin Console</span>
         </div>
       </div>
@@ -103,8 +102,11 @@ export function AppSidebar({ mobile = false, onNavigate }: { mobile?: boolean; o
           const visibleItems = group.items.filter((it) => !it.adminOnly || isAdmin)
           if (visibleItems.length === 0) return null
           return (
-            <div key={group.titleKey} className="mb-4">
-              <p className="px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <div key={group.titleKey} className="mb-6">
+              {/* Titres de section : casse normale, semibold, couleur de texte
+                  pleine. Ils etaient en 10px gris majuscules, trop discrets
+                  pour structurer la navigation. */}
+              <p className="px-3 pb-2 text-[15px] font-semibold text-sidebar-foreground">
                 {t(group.titleKey)}
               </p>
               <div className="space-y-0.5">
@@ -168,7 +170,7 @@ export function AppTopbar({ onOpenNavigation }: { onOpenNavigation?: () => void 
   const nextLanguage: AppLanguage = currentLanguage === 'fr' ? 'en' : 'fr'
 
   return (
-    <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-4 border-b border-border bg-background/80 px-4 backdrop-blur-sm">
+    <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-4 border-b border-border bg-header/80 px-4 backdrop-blur-sm">
       <div className="flex items-center gap-2">
         <Button
           variant="ghost"

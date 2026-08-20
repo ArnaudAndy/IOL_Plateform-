@@ -1,22 +1,31 @@
-import { Workflow } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { IolLogo } from '@/components/common/iol-logo'
 
-export function AppLoader({ compact = false }: { compact?: boolean }) {
+type AppLoaderProps = {
+  /**
+   * Superposition : le loader se place au-dessus de toute l'application
+   * (sidebar et topbar comprises) au lieu de n'occuper que son conteneur.
+   */
+  overlay?: boolean
+}
+
+export function AppLoader({ overlay = false }: AppLoaderProps) {
   return (
     <div
       className={cn(
         'flex items-center justify-center bg-background',
-        compact ? 'min-h-[18rem] w-full' : 'min-h-screen w-full',
+        overlay
+          ? 'fixed inset-0 z-50 h-screen w-screen'
+          : 'min-h-screen w-full',
       )}
       role="status"
+      aria-live="polite"
       aria-label="Chargement de IOL ETL Platform"
     >
       <div className="flex flex-col items-center gap-4">
-        <div className="relative flex h-16 w-16 items-center justify-center">
+        <div className="relative flex h-20 w-20 items-center justify-center">
           <span className="absolute inset-0 animate-spin rounded-full border-2 border-border border-t-primary" />
-          <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
-            <Workflow className="h-6 w-6" aria-hidden="true" />
-          </span>
+          <IolLogo size={48} className="rounded-xl shadow-sm" />
         </div>
         <div className="text-center">
           <p className="text-sm font-semibold">IOL ETL Platform</p>

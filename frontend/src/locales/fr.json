@@ -97,9 +97,7 @@
       "RUNNING": "In progress",
       "SUCCESS": "Success",
       "FAILED": "Failed",
-      "DELIVERED": "Livre",
-      "PENDING": "Pending",
-      "CANCELLED": "Cancelled"
+      "DELIVERED": "Livre"
     },
     "layerStatus": {
       "idle": "waiting",
@@ -182,6 +180,8 @@
   "confirm": {
     "deleteConnectionDescription": "Cette action est irreversible. Les traitements qui utilisent cette connexion ne pourront plus s'en servir.",
     "deleteConnectionTitle": "Supprimer la connexion \"{{name}}\" ?",
+    "deleteExecutionDescription": "Cette action est irreversible. L'execution et ses metriques quittent definitivement l'historique.",
+    "deleteExecutionTitle": "Supprimer l'execution du {{date}} ?",
     "deleteUserDescription": "Cette action est irreversible. L'utilisateur perdra immediatement son acces a la plateforme.",
     "deleteUserTitle": "Supprimer l'utilisateur \"{{email}}\" ?",
     "deleteWorkflowDescription": "Cette action est irreversible. La configuration et ses references seront supprimees.",
@@ -221,6 +221,12 @@
     "summary": "Synthese des donnees recues",
     "totalInbound": "Total reception",
     "viewReceptions": "Voir les receptions"
+  },
+  "executions": {
+    "delete": "Supprimer cette execution",
+    "deleteFailed": "Suppression impossible",
+    "deleteRunning": "Une execution en cours ne peut pas etre supprimee",
+    "deleted": "Execution supprimee"
   },
   "workflows": {
     "createFirst": "Creez votre premier traitement pour demarrer.",

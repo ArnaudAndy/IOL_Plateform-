@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { workflowService, orchestratorService, logsService } from '@/lib/api/services'
 import { describeError } from '@/lib/api/client'
 import { PageHeader, LoadingState, ErrorState, EmptyState } from '@/components/common/states'
+import { DataTable, THead, TBody, Th, Tr, Td } from '@/components/common/data-table'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -171,33 +172,29 @@ export function WorkflowDetailView() {
                   <Row label="Parametres source" value={<code className="block max-h-32 overflow-auto rounded bg-muted p-2 font-mono text-[10px]">{JSON.stringify(s.source_config || {}, null, 2)}</code>} />
                   <div>
                     <p className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">{t('common.columns')} ({s.fields?.length || 0})</p>
-                    <div className="overflow-x-auto rounded-md border border-border">
-                      <table className="w-full min-w-[680px] text-xs">
-                        <thead className="bg-muted/40">
-                          <tr className="text-left text-[10px] uppercase tracking-wide text-muted-foreground">
-                            <th className="px-2 py-1">{t('common.name')}</th>
-                            <th className="px-2 py-1">{t('fields.originalName')}</th>
-                            <th className="px-2 py-1">{t('common.type')}</th>
-                            <th className="px-2 py-1">{t('fields.selected')}</th>
-                            <th className="px-2 py-1">{t('fields.semanticTerm')}</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border">
-                          {(s.fields ?? []).map((f, j) => (
-                            <tr key={j}>
-                              <td className="px-2 py-1 font-mono">{f.name}</td>
-                              <td className="px-2 py-1 text-muted-foreground">{f.originalName || '—'}</td>
-                              <td className="px-2 py-1 text-muted-foreground">{f.type || '—'}</td>
-                              <td className="px-2 py-1">{f.selected ? '✓' : '—'}</td>
-                              <td className="px-2 py-1 text-accent-foreground">{f.semanticTerm || '—'}</td>
-                            </tr>
-                          ))}
-                          {(!s.fields || s.fields.length === 0) && (
-                            <tr><td colSpan={5} className="px-2 py-3 text-center text-muted-foreground">{t('builder.noColumns')}</td></tr>
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
+                    <DataTable minWidth={680}>
+                      <THead>
+                        <Th>{t('common.name')}</Th>
+                        <Th>{t('fields.originalName')}</Th>
+                        <Th>{t('common.type')}</Th>
+                        <Th>{t('fields.semanticTerm')}</Th>
+                        <Th align="right">{t('fields.selected')}</Th>
+                      </THead>
+                      <TBody>
+                        {(s.fields ?? []).map((f, j) => (
+                          <Tr key={j}>
+                            <Td strong className="font-mono">{f.name}</Td>
+                            <Td muted>{f.originalName || '—'}</Td>
+                            <Td muted>{f.type || '—'}</Td>
+                            <Td className="text-accent-foreground">{f.semanticTerm || '—'}</Td>
+                            <Td numeric>{f.selected ? '✓' : '—'}</Td>
+                          </Tr>
+                        ))}
+                        {(!s.fields || s.fields.length === 0) && (
+                          <Tr><Td colSpan={5} align="center" muted>{t('builder.noColumns')}</Td></Tr>
+                        )}
+                      </TBody>
+                    </DataTable>
                   </div>
                   {s.silver_config?.elt_scripts_silver && (
                     <div>
@@ -250,38 +247,34 @@ export function WorkflowDetailView() {
           {logsQ.isLoading ? <LoadingState /> : logsQ.isError ? <ErrorState message={describeError(logsQ.error)} onRetry={() => logsQ.refetch()} /> : logs.length === 0 ? (
             <EmptyState title={t('dashboard.noExecutionTitle')} description={t('dashboard.noExecutionDescription')} />
           ) : (
-            <div className="overflow-x-auto rounded-lg border border-border">
-              <table className="w-full min-w-[760px] text-sm">
-                <thead className="bg-muted/40">
-                  <tr className="text-left text-xs uppercase tracking-wide text-muted-foreground">
-                    <th className="px-3 py-2">{t('common.status')}</th>
-                    <th className="px-3 py-2">{t('common.start')}</th>
-                    <th className="px-3 py-2">{t('common.end')}</th>
-                    <th className="px-3 py-2">{t('common.duration')}</th>
-                    <th className="px-3 py-2">{t('common.triggeredBy')}</th>
-                    <th className="px-3 py-2">{TECH_LABELS.correlationId}</th>
-                    <th className="px-3 py-2"></th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {logs.map((l) => (
-                    <tr key={l.id} className="hover:bg-muted/30">
-                      <td className="px-3 py-2"><ExecutionStatusBadge status={l.status} /></td>
-                      <td className="px-3 py-2 text-muted-foreground">{formatRelative(l.startTime)}</td>
-                      <td className="px-3 py-2 text-muted-foreground">{formatRelative(l.endTime)}</td>
-                      <td className="px-3 py-2">{formatDuration(l.durationMs)}</td>
-                      <td className="px-3 py-2 text-muted-foreground">{l.triggeredBy || '—'}</td>
-                      <td className="px-3 py-2 font-mono text-[11px]">{l.correlationId?.slice(0, 8) || '—'}</td>
-                      <td className="px-3 py-2 text-right">
-                        <Button size="sm" variant="ghost" onClick={() => navigate('executions', { executionId: l.id })}>
-                          {t('common.details')}
-                        </Button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <DataTable minWidth={760}>
+              <THead>
+                <Th>{t('common.status')}</Th>
+                <Th>{t('common.triggeredBy')}</Th>
+                <Th align="right">{TECH_LABELS.correlationId}</Th>
+                <Th align="right">{t('common.start')}</Th>
+                <Th align="right">{t('common.end')}</Th>
+                <Th align="right">{t('common.duration')}</Th>
+                <Th align="right"></Th>
+              </THead>
+              <TBody>
+                {logs.map((l) => (
+                  <Tr key={l.id}>
+                    <Td><ExecutionStatusBadge status={l.status} /></Td>
+                    <Td strong>{l.triggeredBy || '—'}</Td>
+                    <Td numeric className="font-mono text-xs">{l.correlationId?.slice(0, 8) || '—'}</Td>
+                    <Td muted numeric>{formatRelative(l.startTime)}</Td>
+                    <Td muted numeric>{formatRelative(l.endTime)}</Td>
+                    <Td muted numeric>{formatDuration(l.durationMs)}</Td>
+                    <Td align="right" className="py-2">
+                      <Button size="sm" variant="ghost" onClick={() => navigate('executions', { executionId: l.id })}>
+                        {t('common.details')}
+                      </Button>
+                    </Td>
+                  </Tr>
+                ))}
+              </TBody>
+            </DataTable>
           )}
         </TabsContent>
 
@@ -327,30 +320,26 @@ export function WorkflowDetailView() {
               ) : discoverQ.isLoading ? <LoadingState label={t('common.loading')} />
               : discoverQ.isError ? <ErrorState message={describeError(discoverQ.error)} onRetry={() => discoverQ.refetch()} />
               : (
-                <div className="overflow-x-auto rounded-md border border-border">
-                  <table className="w-full min-w-[620px] text-xs">
-                    <thead className="bg-muted/40">
-                      <tr className="text-left text-[10px] uppercase tracking-wide text-muted-foreground">
-                        <th className="px-2 py-1">{t('common.name')}</th>
-                        <th className="px-2 py-1">{t('fields.originalName')}</th>
-                        <th className="px-2 py-1">{t('common.type')}</th>
-                        <th className="px-2 py-1">Null</th>
-                        <th className="px-2 py-1">Taille</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {(discoverQ.data?.columns ?? []).map((c, i) => (
-                        <tr key={i}>
-                          <td className="px-2 py-1 font-mono">{c.name}</td>
-                          <td className="px-2 py-1 text-muted-foreground">{c.originalName || '—'}</td>
-                          <td className="px-2 py-1 text-muted-foreground">{c.type}</td>
-                          <td className="px-2 py-1">{c.nullable ? '✓' : '—'}</td>
-                          <td className="px-2 py-1">{c.size || '—'}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                <DataTable minWidth={620}>
+                  <THead>
+                    <Th>{t('common.name')}</Th>
+                    <Th>{t('fields.originalName')}</Th>
+                    <Th>{t('common.type')}</Th>
+                    <Th align="right">Null</Th>
+                    <Th align="right">Taille</Th>
+                  </THead>
+                  <TBody>
+                    {(discoverQ.data?.columns ?? []).map((c, i) => (
+                      <Tr key={i}>
+                        <Td strong className="font-mono">{c.name}</Td>
+                        <Td muted>{c.originalName || '—'}</Td>
+                        <Td muted>{c.type}</Td>
+                        <Td numeric>{c.nullable ? '✓' : '—'}</Td>
+                        <Td numeric>{c.size || '—'}</Td>
+                      </Tr>
+                    ))}
+                  </TBody>
+                </DataTable>
               )}
             </CardContent>
           </Card>

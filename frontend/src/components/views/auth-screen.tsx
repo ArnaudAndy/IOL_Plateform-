@@ -1,5 +1,7 @@
 import { useState } from 'react'
-import { Workflow, ArrowRight, Loader2, AlertCircle, KeyRound, ChevronLeft } from 'lucide-react'
+import { ArrowRight, Loader2, AlertCircle, KeyRound, ChevronLeft } from 'lucide-react'
+import { IolLogo } from '@/components/common/iol-logo'
+import { MorphingParticlesBackground } from '@/components/common/morphing-particles-background'
 import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '@/stores/auth-store'
 import { authService } from '@/lib/api/services'
@@ -29,15 +31,14 @@ export function AuthScreen() {
 
   if (keycloakEnabled) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background p-4">
-        <div className="w-full max-w-md">
+      <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background p-4">
+        <MorphingParticlesBackground />
+        <div className="relative z-10 w-full max-w-md">
           <div className="mb-6 flex flex-col items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
-              <Workflow className="h-6 w-6" />
-            </div>
+            <IolLogo size={48} className="rounded-xl shadow-sm" />
             <div className="text-center">
-              <h1 className="text-lg font-semibold">IOL ETL Platform</h1>
-              <p className="text-xs text-muted-foreground">{t('app.console')}</p>
+              <h1 className="text-lg font-semibold text-white">IOL ETL Platform</h1>
+              <p className="text-xs text-white/70">{t('app.console')}</p>
             </div>
           </div>
           <Card>
@@ -108,15 +109,14 @@ export function AuthScreen() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-4">
-      <div className="w-full max-w-md">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background p-4">
+      <MorphingParticlesBackground />
+      <div className="relative z-10 w-full max-w-md">
         <div className="mb-6 flex flex-col items-center gap-3">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
-            <Workflow className="h-6 w-6" />
-          </div>
+          <IolLogo size={48} className="rounded-xl shadow-sm" />
           <div className="text-center">
-            <h1 className="text-lg font-semibold">IOL ETL Platform</h1>
-            <p className="text-xs text-muted-foreground">{t('app.console')}</p>
+            <h1 className="text-lg font-semibold text-white">IOL ETL Platform</h1>
+            <p className="text-xs text-white/70">{t('app.console')}</p>
           </div>
         </div>
 

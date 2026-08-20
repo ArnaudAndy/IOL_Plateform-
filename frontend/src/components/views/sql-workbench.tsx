@@ -5,6 +5,7 @@ import { ShieldCheck, Play, CheckCircle2, AlertCircle, Loader2, Terminal, Databa
 import { connectionService, sqlService } from '@/lib/api/services'
 import { describeError } from '@/lib/api/client'
 import { PageHeader } from '@/components/common/states'
+import { DataTable, THead, TBody, Th, Tr, Td } from '@/components/common/data-table'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -178,24 +179,24 @@ export function SqlWorkbenchView() {
                 {executeResult.error ? (
                   <pre className="sql-block rounded-md border border-destructive/30 bg-destructive/5 p-3 text-destructive">{executeResult.error}</pre>
                 ) : executeResult.columns && executeResult.columns.length > 0 ? (
-                  <div className="overflow-auto">
-                    <table className="w-full text-xs">
-                      <thead className="bg-muted/40">
-                        <tr className="text-left text-[10px] uppercase tracking-wide text-muted-foreground">
-                          {executeResult.columns.map((c, i) => <th key={i} className="px-2 py-1.5">{c}</th>)}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-border">
-                        {(executeResult.rows || []).map((row, i) => (
-                          <tr key={i}>
-                            {executeResult.columns!.map((column) => (
-                              <td key={column} className="px-2 py-1.5 font-mono">{String(row[column] ?? 'NULL')}</td>
-                            ))}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                  <DataTable>
+                    <THead>
+                      {executeResult.columns.map((c, i) => <Th key={i}>{c}</Th>)}
+                    </THead>
+                    <TBody>
+                      {(executeResult.rows || []).map((row, i) => (
+                        <Tr key={i}>
+                          {executeResult.columns!.map((column, index) => (
+                            // Premiere colonne du jeu de resultats en semibold,
+                            // comme partout ailleurs dans la console.
+                            <Td key={column} strong={index === 0} className="whitespace-nowrap font-mono text-xs">
+                              {String(row[column] ?? 'NULL')}
+                            </Td>
+                          ))}
+                        </Tr>
+                      ))}
+                    </TBody>
+                  </DataTable>
                 ) : (
                   <p className="text-sm text-muted-foreground">Aucune ligne retournée.</p>
                 )}

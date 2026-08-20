@@ -71,8 +71,12 @@ public class ObjectStorageClient {
         String fileName = manifest.path("fileName").asText("source.csv");
         Path root = Path.of(tempDir, "object-storage", safe(execLogId)).toAbsolutePath().normalize();
         Files.createDirectories(root);
+        // createTempFile reserve un nom unique en creant le fichier, mais le
+        // transformer synchrone exige de creer lui-meme sa cible: on libere donc
+        // l'emplacement juste avant le transfert, le nom restant reserve pour nous.
         Path output = Files.createTempFile(root, "source-", "-" + safe(fileName));
         try {
+            Files.delete(output);
             s3().getObject(GetObjectRequest.builder().bucket(bucket).key(objectKey).build(),
                     ResponseTransformer.toFile(output));
             String actual = sha256(output);

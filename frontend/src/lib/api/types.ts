@@ -302,7 +302,9 @@ export interface SchemaDiscoveryResponse {
 }
 
 // ----- Execution logs -----
-export type ExecutionStatus = 'RUNNING' | 'SUCCESS' | 'FAILED' | 'DELIVERED' | 'PENDING' | 'CANCELLED'
+// Miroir exact de l'enum backend ExecutionStatus. PENDING et CANCELLED ont ete
+// retires : aucun code serveur ne les produit, ils n'apparaissaient donc jamais.
+export type ExecutionStatus = 'RUNNING' | 'SUCCESS' | 'FAILED' | 'DELIVERED'
 
 export interface SourceMetric {
   sourceName: string

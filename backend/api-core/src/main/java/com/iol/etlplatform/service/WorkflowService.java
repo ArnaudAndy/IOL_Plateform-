@@ -446,8 +446,14 @@ public class WorkflowService {
     }
 
     private void validateIndexes(String label, List<Map<String, Object>> indexes) {
+        if (indexes == null) {
+            return;
+        }
         for (int index = 0; index < indexes.size(); index++) {
             Map<String, Object> definition = indexes.get(index);
+            if (definition == null) {
+                throw new BadRequestException(label + ": définition d'index vide à la position " + (index + 1) + ".");
+            }
             String name = firstNonBlank(definition, "name");
             if (!name.isBlank() && !name.matches("[A-Za-z_][A-Za-z0-9_$]*")) {
                 throw new BadRequestException(label + ": nom d'index invalide à la position " + (index + 1) + ".");

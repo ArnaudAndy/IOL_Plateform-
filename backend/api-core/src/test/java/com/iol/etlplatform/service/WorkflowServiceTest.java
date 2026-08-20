@@ -122,6 +122,33 @@ class WorkflowServiceTest {
                 workflowService, "validateOptionalStages", List.of(source), gold, null));
     }
 
+    @Test
+    void goldWithoutDeclaredIndexesIsAccepted() {
+        SourceDefinition source = sourceWithSilver(Map.of("enabled", false));
+        GoldConfigGlobal gold = new GoldConfigGlobal();
+        gold.setEnabled(true);
+        gold.setInputLayer("BRONZE");
+        gold.setTargetTableGold("gold.activite_service");
+        gold.setEltScriptsGold("CREATE TABLE gold.activite_service AS SELECT 1");
+
+        assertDoesNotThrow(() -> ReflectionTestUtils.invokeMethod(
+                workflowService, "validateOptionalStages", List.of(source), gold, null));
+    }
+
+    @Test
+    void goldRejectsAnEmptyIndexDefinition() {
+        SourceDefinition source = sourceWithSilver(Map.of("enabled", false));
+        GoldConfigGlobal gold = new GoldConfigGlobal();
+        gold.setEnabled(true);
+        gold.setInputLayer("BRONZE");
+        gold.setTargetTableGold("gold.activite_service");
+        gold.setEltScriptsGold("CREATE TABLE gold.activite_service AS SELECT 1");
+        gold.setIndexes(java.util.Collections.singletonList(null));
+
+        assertThrows(BadRequestException.class, () -> ReflectionTestUtils.invokeMethod(
+                workflowService, "validateOptionalStages", List.of(source), gold, null));
+    }
+
     private SourceDefinition sourceWithSilver(Map<String, Object> silverConfig) {
         SourceDefinition source = new SourceDefinition();
         Map<String, Object> config = new LinkedHashMap<>();

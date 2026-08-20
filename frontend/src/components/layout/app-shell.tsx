@@ -64,7 +64,7 @@ export function AppShell() {
       <div className="flex min-w-0 flex-1 flex-col">
         <AppTopbar onOpenNavigation={() => setMobileNavOpen(true)} />
         <main id="app-main-scroll" className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-4 sm:px-4 md:px-6 md:py-6">
-          <Suspense fallback={<AppLoader compact />}>
+          <Suspense fallback={<AppLoader overlay />}>
             {renderView(view)}
           </Suspense>
           {['workflows', 'workflow-detail', 'workflow-builder', 'executions'].includes(view) && (

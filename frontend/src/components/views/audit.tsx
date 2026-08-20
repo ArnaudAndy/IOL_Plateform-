@@ -19,6 +19,8 @@ import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { TablePagination, paginate, PAGE_SIZE_OPTIONS } from '@/components/common/table-pagination'
+import { DataTable, THead, TBody, Th, Tr, Td } from '@/components/common/data-table'
 import { formatDateTime } from '@/lib/format'
 import type { AuditLog, UserDto } from '@/lib/api/types'
 
@@ -130,45 +132,59 @@ function AllAuditPanel({ users }: { users: UserDto[] }) {
 }
 
 function AuditTable({ logs, users }: { logs: AuditLog[]; users: UserDto[] }) {
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0])
+
+  // Le journal se rafraichit toutes les 10s et les filtres font varier le
+  // volume : `paginate` et TablePagination bornent la page au dernier index
+  // existant, ce qui evite d'afficher une page devenue vide sans avoir a
+  // reinitialiser l'etat a chaque changement de donnees.
+  const visibleLogs = paginate(logs, page, pageSize)
+
   if (logs.length === 0) return <EmptyState title="Aucune entrée" icon={ShieldAlert} />
   return (
-    <div className="overflow-x-auto rounded-md border border-border">
-      <table className="min-w-[980px] w-full text-xs">
-        <thead className="bg-muted/40">
-          <tr className="text-left text-[10px] uppercase text-muted-foreground">
-            <th className="px-3 py-2">Horodatage</th>
-            <th className="px-3 py-2">Utilisateur</th>
-            <th className="px-3 py-2">Action</th>
-            <th className="px-3 py-2">Ressource</th>
-            <th className="px-3 py-2">Statut</th>
-            <th className="px-3 py-2">IP</th>
-            <th className="px-3 py-2">Détail</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-border">
-          {logs.map((log) => (
-            <tr key={log.id} className="hover:bg-muted/30">
-              <td className="whitespace-nowrap px-3 py-2 text-muted-foreground">{formatDateTime(log.timestamp)}</td>
-              <td className="px-3 py-2">
-                <p>{userLabel(log.userId, users)}</p>
-                {log.userRole && <p className="text-[10px] text-muted-foreground">{log.userRole}</p>}
-              </td>
-              <td className="px-3 py-2 font-medium">{actionLabel(log.action)}</td>
-              <td className="px-3 py-2">
-                <span className="font-mono text-[10px]">{log.resourceType}</span>
+    <div className="space-y-2">
+      <DataTable minWidth={980}>
+        <THead>
+          <Th>Utilisateur</Th>
+          <Th>Action</Th>
+          <Th>Ressource</Th>
+          <Th>Statut</Th>
+          <Th>Détail</Th>
+          <Th align="right">IP</Th>
+          <Th align="right">Horodatage</Th>
+        </THead>
+        <TBody>
+          {visibleLogs.map((log) => (
+            <Tr key={log.id}>
+              <Td strong>
+                {userLabel(log.userId, users)}
+                {log.userRole && <span className="mt-0.5 block text-xs font-normal text-muted-foreground">{log.userRole}</span>}
+              </Td>
+              <Td>{actionLabel(log.action)}</Td>
+              <Td>
+                <span className="font-mono text-xs">{log.resourceType}</span>
                 {log.resourceId && <span className="ml-1 text-muted-foreground">{log.resourceId.slice(0, 12)}</span>}
-              </td>
-              <td className="px-3 py-2"><AuditStatus status={log.status} /></td>
-              <td className="px-3 py-2 font-mono text-[10px]">{log.ipAddress || '—'}</td>
-              <td className="max-w-[340px] px-3 py-2">
+              </Td>
+              <Td><AuditStatus status={log.status} /></Td>
+              <Td className="max-w-[340px]">
                 <span className={log.errorMessage ? 'text-destructive' : 'text-muted-foreground'}>
                   {log.errorMessage || log.description || '—'}
                 </span>
-              </td>
-            </tr>
+              </Td>
+              <Td muted numeric className="font-mono text-xs">{log.ipAddress || '—'}</Td>
+              <Td muted numeric className="whitespace-nowrap">{formatDateTime(log.timestamp)}</Td>
+            </Tr>
           ))}
-        </tbody>
-      </table>
+        </TBody>
+      </DataTable>
+      <TablePagination
+        page={page}
+        pageSize={pageSize}
+        total={logs.length}
+        onPageChange={setPage}
+        onPageSizeChange={setPageSize}
+      />
     </div>
   )
 }

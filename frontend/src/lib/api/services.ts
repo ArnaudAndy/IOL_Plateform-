@@ -121,6 +121,9 @@ export const logsService = {
   interopSummary: () => api.get<InteropSummary>('/logs/interop/summary'),
   interopCorrelation: (correlationId: string) =>
     api.get<ExecutionLogDto[]>(`/logs/interop/correlation/${correlationId}`),
+  // Suppression d'une execution passee. Le backend refuse celles encore en
+  // cours (RUNNING) : l'appelant doit remonter l'erreur telle quelle.
+  remove: (executionId: string) => api.del<void>(`/logs/${executionId}`),
 }
 
 export const interopTestService = {

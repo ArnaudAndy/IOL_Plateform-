@@ -97,9 +97,7 @@
       "RUNNING": "Running",
       "SUCCESS": "Success",
       "FAILED": "Failed",
-      "DELIVERED": "Delivered",
-      "PENDING": "Pending",
-      "CANCELLED": "Cancelled"
+      "DELIVERED": "Delivered"
     },
     "layerStatus": {
       "idle": "waiting",
@@ -182,6 +180,8 @@
   "confirm": {
     "deleteConnectionDescription": "This action is irreversible. Workflows using this connection will no longer be able to use it.",
     "deleteConnectionTitle": "Delete connection \"{{name}}\"?",
+    "deleteExecutionDescription": "This action is irreversible. The execution and its metrics leave the history for good.",
+    "deleteExecutionTitle": "Delete the execution from {{date}}?",
     "deleteUserDescription": "This action is irreversible. The user will immediately lose access to the platform.",
     "deleteUserTitle": "Delete user \"{{email}}\"?",
     "deleteWorkflowDescription": "This action is irreversible. The configuration and its references will be deleted.",
@@ -221,6 +221,12 @@
     "summary": "Received data summary",
     "totalInbound": "Total reception",
     "viewReceptions": "View receptions"
+  },
+  "executions": {
+    "delete": "Delete this execution",
+    "deleteFailed": "Deletion failed",
+    "deleteRunning": "A running execution cannot be deleted",
+    "deleted": "Execution deleted"
   },
   "workflows": {
     "createFirst": "Create your first workflow to start.",

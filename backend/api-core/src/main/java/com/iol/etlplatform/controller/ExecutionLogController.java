@@ -208,6 +208,41 @@ public class ExecutionLogController {
         ));
     }
 
+    /**
+     * Supprimer une exécution terminée de l'historique.
+     *
+     * Une exécution encore RUNNING est refusée : son pipeline écrit toujours
+     * dans le log (heartbeat, métriques par source) et le supprimer laisserait
+     * un traitement orphelin, invisible du monitoring.
+     * La trace de la suppression est enregistrée par ApiAuditFilter.
+     */
+    @DeleteMapping("/{executionId}")
+    @PreAuthorize("hasAnyRole('ADMIN','USER')")
+    @Operation(
+            summary = "Supprimer une exécution terminée",
+            description = "Retire définitivement une exécution passée de l'historique. Refusé tant qu'elle est en cours."
+    )
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Exécution supprimée"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Exécution en cours ou introuvable"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Non authentifié")
+    })
+    public ResponseEntity<ApiResponse<Void>> deleteExecution(
+            @Parameter(description = "ID de l'exécution", required = true)
+            @PathVariable String executionId) {
+        ExecutionLog execution = getAccessibleExecution(executionId);
+
+        if (execution.getStatus() == com.iol.etlplatform.entity.enums.ExecutionStatus.RUNNING) {
+            throw new BadRequestException(
+                    "Impossible de supprimer une execution en cours: " + executionId);
+        }
+
+        log.info("Suppression de l'execution {} (workflow {})", executionId, execution.getWorkflowId());
+        executionLogRepository.delete(execution);
+
+        return ResponseEntity.ok(new ApiResponse<>("Execution supprimee.", null));
+    }
+
     private List<ExecutionLog> visibleLogs(List<ExecutionLog> logs) {
         if (isCurrentUserAdmin()) {
             return logs;

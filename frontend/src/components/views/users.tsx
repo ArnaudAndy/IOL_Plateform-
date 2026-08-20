@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next'
 import { userService } from '@/lib/api/services'
 import { describeError } from '@/lib/api/client'
 import { PageHeader, LoadingState, ErrorState, EmptyState } from '@/components/common/states'
+import { DataTable, THead, TBody, Th, Tr, Td } from '@/components/common/data-table'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -59,51 +60,47 @@ export function UsersView() {
       : listQ.isError ? <ErrorState message={describeError(listQ.error)} onRetry={() => listQ.refetch()} />
       : users.length === 0 ? <EmptyState title={`${t('common.none')} ${t('common.user').toLowerCase()}`} icon={UserCog} />
       : (
-        <div className="overflow-x-auto rounded-lg border border-border">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/40">
-              <tr className="text-left text-xs uppercase tracking-wide text-muted-foreground">
-                <th className="px-3 py-2">{t('common.name')}</th>
-                <th className="px-3 py-2">{t('common.email')}</th>
-                <th className="px-3 py-2">{t('common.role')}</th>
-                <th className="px-3 py-2">{t('common.status')}</th>
-                <th className="px-3 py-2 text-right">{t('common.actions')}</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {users.map((u: UserDto) => (
-                <tr key={u.id} className="hover:bg-muted/30">
-                  <td className="px-3 py-2 font-medium">{u.name}{me?.id === u.id && <span className="ml-1.5 text-[10px] text-muted-foreground">({t('common.user').toLowerCase()})</span>}</td>
-                  <td className="px-3 py-2 text-muted-foreground">{u.email}</td>
-                  <td className="px-3 py-2">
-                    <Select
-                      value={u.role}
-                      onValueChange={(v: UserRole) => updateRoleMut.mutate({ id: u.id, role: v })}
-                      disabled={me?.id === u.id}
-                    >
-                      <SelectTrigger className="h-7 w-32 text-xs"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="USER">{roleLabel('USER')}</SelectItem>
-                        <SelectItem value="ADMIN">{roleLabel('ADMIN')}</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </td>
-                  <td className="px-3 py-2">
-                    {u.active
-                      ? <Badge variant="outline" className="text-success border-success/30">{t('common.active')}</Badge>
-                      : <Badge variant="outline" className="text-muted-foreground">{t('common.inactive')}</Badge>
-                    }
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    <Button size="sm" variant="ghost" className="text-destructive" disabled={me?.id === u.id} onClick={() => setUserToDelete(u)}>
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DataTable minWidth={720}>
+          <THead>
+            <Th>{t('common.name')}</Th>
+            <Th>{t('common.email')}</Th>
+            <Th>{t('common.role')}</Th>
+            <Th>{t('common.status')}</Th>
+            <Th align="right">{t('common.actions')}</Th>
+          </THead>
+          <TBody>
+            {users.map((u: UserDto) => (
+              <Tr key={u.id}>
+                <Td strong>{u.name}{me?.id === u.id && <span className="ml-1.5 text-xs font-normal text-muted-foreground">({t('common.user').toLowerCase()})</span>}</Td>
+                <Td muted>{u.email}</Td>
+                <Td className="py-2">
+                  <Select
+                    value={u.role}
+                    onValueChange={(v: UserRole) => updateRoleMut.mutate({ id: u.id, role: v })}
+                    disabled={me?.id === u.id}
+                  >
+                    <SelectTrigger className="h-8 w-32 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="USER">{roleLabel('USER')}</SelectItem>
+                      <SelectItem value="ADMIN">{roleLabel('ADMIN')}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Td>
+                <Td>
+                  {u.active
+                    ? <Badge variant="outline" className="text-success border-success/30">{t('common.active')}</Badge>
+                    : <Badge variant="outline" className="text-muted-foreground">{t('common.inactive')}</Badge>
+                  }
+                </Td>
+                <Td align="right" className="py-2">
+                  <Button size="sm" variant="ghost" className="text-destructive" disabled={me?.id === u.id} onClick={() => setUserToDelete(u)}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </Td>
+              </Tr>
+            ))}
+          </TBody>
+        </DataTable>
       )}
       <ConfirmDialog
         open={!!userToDelete}

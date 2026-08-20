@@ -26,5 +26,6 @@ IOL est une plateforme d’intégration de données orientée métadonnées. Ell
 
 - [../README.md](../README.md)
 - [ARCHITECTURE.md](ARCHITECTURE.md)
+- [UML_MODELING.md](UML_MODELING.md)
 - [SECURITY.md](SECURITY.md)
 - [PRODUCTION_RUNBOOK.md](PRODUCTION_RUNBOOK.md)

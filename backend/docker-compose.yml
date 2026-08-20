@@ -254,6 +254,9 @@ services:
       APP_KAFKA_STATUS_TOPIC:        "iol.pipeline.status"
       APP_KAFKA_DLQ_TOPIC:           "iol.pipeline.commands.dlq"
       WORKFLOW_SERVICE_URL:      "http://api-core:8084"
+      # Le worker demande le credential de destination a api-core: sans ce secret
+      # partage, l'etape PREPARATION echoue faute d'authentification.
+      APP_INTERNAL_SECRET:       ${INTEROP_INTERNAL_SECRET:-}
       HOP_HOME:                  "/opt/hop"
       HOP_JAVA_HOME:             "/opt/iol/java21"
       HOP_RUN_SCRIPT:            "hop-run.sh"

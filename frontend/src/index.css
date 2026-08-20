@@ -16,6 +16,7 @@
   --color-sidebar-primary: var(--sidebar-primary);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar: var(--sidebar);
+  --color-header: var(--header);
   --color-chart-5: var(--chart-5);
   --color-chart-4: var(--chart-4);
   --color-chart-3: var(--chart-3);
@@ -53,10 +54,14 @@
   --radius: 0.625rem;
   --font-inter: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-code: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  /* Light — clair, bas de contraste, lisible */
-  --background: oklch(0.99 0.002 240);
+  /* Light — clair, bas de contraste, lisible.
+     Le fond de page est legerement bleute : c'est lui qui detache les
+     surfaces blanches (sidebar, header, cartes), sans teinter ces dernieres. */
+  --background: #f8fbf8;
   --foreground: oklch(0.18 0.01 240);
   --card: oklch(1 0 0);
+  /* Barre superieure : blanche comme la sidebar, distincte du fond de page. */
+  --header: oklch(1 0 0);
   --card-foreground: oklch(0.18 0.01 240);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.18 0.01 240);
@@ -85,11 +90,13 @@
   --warning-foreground: oklch(0.2 0.01 70);
   --info: oklch(0.65 0.1 220);
   --info-foreground: oklch(0.99 0 0);
-  --sidebar: oklch(0.985 0.002 240);
+  /* Sidebar clair : blanc pur, neutre. C'est le fond de page #f8fbf8 qui la
+     detache, pas une teinte propre. Seul l'element actif porte du vert. */
+  --sidebar: oklch(1 0 0);
   --sidebar-foreground: oklch(0.18 0.01 240);
   --sidebar-primary: oklch(0.55 0.13 160);
   --sidebar-primary-foreground: oklch(0.99 0 0);
-  --sidebar-accent: oklch(0.95 0.02 160);
+  --sidebar-accent: oklch(0.955 0.003 240);
   --sidebar-accent-foreground: oklch(0.22 0.01 240);
   --sidebar-active: #008856;
   --sidebar-border: oklch(0.9 0.005 240);
@@ -100,6 +107,8 @@
   /* Dark — ops console : zinc profond + accents emerald */
   --background: oklch(0.16 0.005 240);
   --foreground: oklch(0.95 0.005 240);
+  /* En sombre la barre superieure reste sur le fond de page, comme avant. */
+  --header: oklch(0.16 0.005 240);
   --card: oklch(0.21 0.006 240);
   --card-foreground: oklch(0.95 0.005 240);
   --popover: oklch(0.21 0.006 240);
