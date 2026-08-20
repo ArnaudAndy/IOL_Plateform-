@@ -39,8 +39,9 @@ done
 [[ -n "${IOL_INITIAL_ADMIN_USERNAME:-}" && -n "${IOL_INITIAL_ADMIN_EMAIL:-}" ]] \
   || fail 'un administrateur IOL initial est obligatoire'
 
-if grep -Eiq '^[A-Z0-9_]*(PASSWORD|SECRET|TOKEN|API_KEY)[A-Z0-9_]*=.+$' "${ENV_FILE}"; then
-  fail 'un secret semble etre stocke en clair dans le fichier d environnement'
+if grep -Ev '^[[:space:]]*[A-Z0-9_]+_FILE=' "${ENV_FILE}" \
+  | grep -Eiq '^[A-Z0-9_]*(PASSWORD|SECRET|TOKEN|API_KEY)[A-Z0-9_]*=.+$'; then
+  fail 'un secret semble etre stocke en clair dans le fichier d environnement; utilisez une reference *_FILE'
 fi
 
 required_secrets=(

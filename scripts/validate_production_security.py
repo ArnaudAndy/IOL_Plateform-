@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
-ENV_FILE = BACKEND / ".env.production.example"
+ENV_FILE = BACKEND / ".env.production"
 
 
 def compose_json(*files: Path, profiles: tuple[str, ...] = ()) -> dict:

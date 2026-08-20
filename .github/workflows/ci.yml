@@ -124,7 +124,7 @@ jobs:
         working-directory: backend
         run: >-
           docker compose
-          --env-file .env.production.example
+          --env-file .env.production
           -f docker-compose.yml
           -f docker-compose.production.yml
           config --quiet
@@ -133,7 +133,7 @@ jobs:
         run: >-
           docker compose
           --profile bootstrap
-          --env-file .env.production.example
+          --env-file .env.production
           -f docker-compose.yml
           -f docker-compose.production.yml
           config --quiet
@@ -141,7 +141,7 @@ jobs:
         working-directory: backend
         run: >-
           docker compose
-          --env-file .env.production.example
+          --env-file .env.production
           -f openhim/docker-compose.openhim.yml
           -f openhim/docker-compose.openhim.production.yml
           config --quiet

@@ -40,7 +40,9 @@ Pour la premiere installation uniquement :
 
 ```bash
 cd backend
-bash ops/production/deploy.sh --environment production --bootstrap
+docker compose --env-file .env.production \
+  -f docker-compose.yml -f docker-compose.production.yml \
+  --profile bootstrap up --abort-on-container-exit keycloak-bootstrap
 ```
 
 Lors des releases suivantes, executer uniquement la seconde commande. Les
@@ -51,7 +53,11 @@ verifient ensuite l'obtention d'un jeton avec leurs identites de service.
 
 ```bash
 cd backend
-bash ops/production/deploy.sh --environment production
+docker compose --env-file .env.production \
+  -f docker-compose.yml -f docker-compose.production.yml up -d
+docker compose --env-file .env.production \
+  -f openhim/docker-compose.openhim.yml \
+  -f openhim/docker-compose.openhim.production.yml up -d
 ```
 
 ## 4. Vérification minimale
