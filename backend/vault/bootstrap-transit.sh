@@ -64,17 +64,21 @@ vault write -f -field=secret_id auth/approle/role/iol-backup/secret-id \
   > "${OUTPUT_DIR}/vault-backup-secret-id"
 
 vault policy write iol-rustfs /vault/policies/iol-rustfs.hcl
-vault token create -orphan -period=24h -policy=iol-rustfs \
-  -display-name=iol-rustfs-kms -field=auth.client_token \
-  > "${OUTPUT_DIR}/rustfs-vault-token"
-chmod 600 "${OUTPUT_DIR}/vault-api-role-id" "${OUTPUT_DIR}/vault-api-secret-id" \
-  "${OUTPUT_DIR}/rustfs-vault-token"
 
+# L'audit doit etre disponible avant de creer le jeton periodique RustFS.
+# Ainsi, un echec de montage/permissions reste rejouable sans creer un second
+# jeton periodique actif mais non reference par le fichier de sortie.
 if ! vault audit list -format=json | grep -Fq '"file/"'; then
   vault audit enable file file_path=/vault/audit/audit.log mode=0600
 fi
 
-chmod 600 "${OUTPUT_DIR}/vault-backup-role-id" "${OUTPUT_DIR}/vault-backup-secret-id"
+vault token create -orphan -period=24h -policy=iol-rustfs \
+  -display-name=iol-rustfs-kms -field=token \
+  > "${OUTPUT_DIR}/rustfs-vault-token"
+chmod 444 "${OUTPUT_DIR}/vault-api-role-id" "${OUTPUT_DIR}/vault-api-secret-id" \
+  "${OUTPUT_DIR}/rustfs-vault-token"
+
+chmod 444 "${OUTPUT_DIR}/vault-backup-role-id" "${OUTPUT_DIR}/vault-backup-secret-id"
 
 vault token revoke -self >/dev/null
 printf 'Vault Transit initialized and bootstrap token revoked. Delete its local token file now.\n'

@@ -141,7 +141,7 @@ if [[ -s "${BACKUP_DIR}/vault.snap" ]]; then
   docker run --rm \
     --volume "$(docker_host_path "${BACKUP_DIR}"):/backup:ro" \
     --entrypoint /bin/sh \
-    hashicorp/vault:1.21.7 \
+    hashicorp/vault:1.21.4 \
     -ec 'vault operator raft snapshot inspect /backup/vault.snap' >/dev/null
 fi
 

@@ -78,7 +78,7 @@ test -s "${OUTPUT_FILE}"
 docker run --rm \
   --volume "$(docker_host_path "${OUTPUT_DIR}"):/backup:ro" \
   --entrypoint /bin/sh \
-  hashicorp/vault:1.21.7 \
+  hashicorp/vault:1.21.4 \
   -ec "vault operator raft snapshot inspect '/backup/${OUTPUT_NAME}'" \
   > "${OUTPUT_FILE}.inspect.txt"
 test -s "${OUTPUT_FILE}.inspect.txt"

@@ -23,6 +23,12 @@ read_secret KAFKA_SSL_TRUSTSTORE_PASSWORD "${KAFKA_SSL_TRUSTSTORE_PASSWORD_FILE:
 read_secret GATEWAY_TLS_KEYSTORE_PASSWORD "${GATEWAY_TLS_KEYSTORE_PASSWORD_FILE:-}"
 read_secret IOL_TLS_TRUSTSTORE_PASSWORD "${IOL_TLS_TRUSTSTORE_PASSWORD_FILE:-}"
 
+if [ -n "${MONGODB_URI:-}" ] && [ -n "${MONGODB_PASSWORD:-}" ]; then
+  mongodb_password_encoded="$(printf '%s' "${MONGODB_PASSWORD}" | od -An -tx1 | tr -d ' \n' | sed 's/../%&/g')"
+  MONGODB_URI="$(printf '%s\n' "${MONGODB_URI}" | awk -v encoded="${mongodb_password_encoded}" '{ gsub(/\$\{MONGODB_PASSWORD\}/, encoded); print }')"
+  export MONGODB_URI
+fi
+
 if [ -n "${IOL_TLS_KEYSTORE_PATH:-}" ] && [ -n "${GATEWAY_TLS_KEYSTORE_PASSWORD:-}" ]; then
   JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} -Djavax.net.ssl.keyStore=${IOL_TLS_KEYSTORE_PATH}"
   JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS} -Djavax.net.ssl.keyStoreType=PKCS12"

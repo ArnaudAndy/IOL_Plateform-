@@ -223,25 +223,32 @@ les clients techniques, configure SMTP et le premier administrateur IOL, puis
 retire le compte administrateur temporaire. Ne jamais la rejouer sans une
 procedure explicite de restauration ou de rotation.
 
-### Demarrage de la plateforme et d'OpenHIM
+### 2. Demarrer la plateforme principale d'abord
 
 ```bash
 cd backend
 docker compose --env-file .env.preproduction \
   -f docker-compose.yml -f docker-compose.production.yml up -d
+```
 
+### 3. Demarrer OpenHIM ensuite
+
+```bash
 docker compose --env-file .env.preproduction \
   -f openhim/docker-compose.openhim.yml \
   -f openhim/docker-compose.openhim.production.yml up -d
 ```
 
-Pour la production, reprendre exactement les deux commandes en remplacant
-`.env.preproduction` par `.env.production`.
+Pour la production, reprendre exactement le meme ordre avec
+`.env.production` : plateforme principale, puis OpenHIM.
 
 ```bash
 cd backend
 docker compose --env-file .env.production \
   -f docker-compose.yml -f docker-compose.production.yml up -d
+```
+
+```bash
 docker compose --env-file .env.production \
   -f openhim/docker-compose.openhim.yml \
   -f openhim/docker-compose.openhim.production.yml up -d

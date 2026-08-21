@@ -129,6 +129,9 @@ services:
       SPRING_PROFILES_ACTIVE: prod
       AUTH_MODE: KEYCLOAK
       JWT_SECRET: ""
+      MANAGEMENT_SERVER_ADDRESS: "127.0.0.1"
+      MANAGEMENT_SERVER_PORT: "8086"
+      MANAGEMENT_SERVER_SSL_ENABLED: "false"
       POSTGRES_URL: "jdbc:postgresql://postgres:5432/lakehouse?sslmode=verify-full&sslrootcert=/run/tls/ca.pem&sslcert=/run/tls/api-core.crt&sslkey=/run/tls/api-core.pk8"
       POSTGRES_USER: "${POSTGRES_USER:-etl_user}"
       POSTGRES_PASSWORD: ""
@@ -194,10 +197,12 @@ services:
       APP_MALWARE_SCAN_ENABLED: "true"
       APP_MALWARE_SCAN_FAIL_CLOSED: "true"
     volumes:
+      - ./api-core/docker-entrypoint.sh:/usr/local/bin/iol-api-entrypoint:ro
       - iol-upload-data:/data/iol/uploads
       - iol-quarantine-data:/data/iol/quarantine
       - iol-api-transport:/var/lib/iol/transport
       - ./secrets/runtime-tls/api-core:/run/tls:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/iol-api-entrypoint"]
     secrets:
       - postgres-password
       - mongodb-app-password
@@ -226,6 +231,16 @@ services:
       keycloak:
         condition: service_healthy
     networks: [iol-internal, iol-egress, iol-vault]
+    healthcheck:
+      # Le port metier 8084 est en HTTPS/mTLS. L'Actuator local de production
+      # ecoute volontairement en HTTP sur le port de management non expose.
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8086/actuator/health/readiness"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      # Le demarrage complet de Spring Boot (JPA, MongoDB, TLS, Kafka) peut
+      # depasser cinq minutes sur l'hote de preproduction a 4 CPU.
+      start_period: 10m
     # api-core reste le plan de controle et l'entree interop HTTP. Les lectures
     # de sources sont isolees dans source-gateway.
     deploy:
@@ -283,8 +298,10 @@ services:
       APP_EXECUTION_MAX_SOURCE_CONNECTIONS: "${SOURCE_GATEWAY_MAX_SOURCE_CONNECTIONS:-8}"
       APP_UPLOAD_ROOT: "/data/iol/uploads"
     volumes: !override
+      - ./source-gateway/docker-entrypoint.sh:/app/docker-entrypoint.sh:ro
       - iol-upload-data:/data/iol/uploads:ro
       - ./secrets/runtime-tls/source-gateway:/run/tls:ro
+    entrypoint: ["/bin/sh", "/app/docker-entrypoint.sh"]
     secrets:
       - mongodb-gateway-password
       - tls-store-password
@@ -359,10 +376,12 @@ services:
       SPARK_TLS_KEYSTORE_PATH: "/run/tls/pipeline-consumer.p12"
       SPARK_CONF_DIR: "/tmp/iol/spark-conf"
     volumes:
+      - ./pipeline-consumer/docker-entrypoint.sh:/app/docker-entrypoint.sh:ro
       # Le projet Hop et les moteurs Python sont inclus dans l'image immuable.
       # Aucun chemin de projet Hop n'est attendu sur le serveur de production.
       - iol-hop-temp:/tmp/iol
       - ./secrets/runtime-tls/pipeline-consumer:/run/tls:ro
+    entrypoint: ["/bin/sh", "/app/docker-entrypoint.sh"]
     secrets:
       - postgres-password
       - mongodb-pipeline-password
@@ -412,7 +431,9 @@ services:
 
   spark-master:
     ports: !reset []
-    entrypoint: ["/opt/iol/start-secure-spark.sh"]
+    # Invocation explicite par Bash : robuste lorsque le depot est copie depuis
+    # Windows, qui ne conserve pas necessairement le bit executable du script.
+    entrypoint: ["/bin/bash", "/opt/iol/start-secure-spark.sh"]
     environment:
       SPARK_NODE_ROLE: master
       SPARK_AUTH_SECRET_FILE: "/run/secrets/spark-auth-secret"
@@ -431,7 +452,7 @@ services:
 
   spark-worker:
     ports: !reset []
-    entrypoint: ["/opt/iol/start-secure-spark.sh"]
+    entrypoint: ["/bin/bash", "/opt/iol/start-secure-spark.sh"]
     environment:
       SPARK_NODE_ROLE: worker
       SPARK_AUTH_SECRET_FILE: "/run/secrets/spark-auth-secret"
@@ -450,8 +471,12 @@ services:
     deploy:
       replicas: "${SPARK_WORKER_REPLICAS:-3}"
       resources:
-        limits: {cpus: "8", memory: 16G}
-        reservations: {cpus: "2", memory: 4G}
+        limits:
+          cpus: "${SPARK_WORKER_CPU_LIMIT:-8}"
+          memory: "${SPARK_WORKER_MEMORY_LIMIT:-16G}"
+        reservations:
+          cpus: "${SPARK_WORKER_CPU_RESERVATION:-2}"
+          memory: "${SPARK_WORKER_MEMORY_RESERVATION:-4G}"
     security_opt: ["no-new-privileges:true"]
 
   kafka:
@@ -670,7 +695,7 @@ services:
     security_opt: ["no-new-privileges:true"]
 
   vault-rustfs-token-renewer:
-    image: hashicorp/vault:1.21.7
+    image: hashicorp/vault:1.21.4
     restart: unless-stopped
     entrypoint: ["/bin/sh", "/opt/iol/renew-rustfs-token.sh"]
     environment:
@@ -696,8 +721,9 @@ services:
   rustfs:
     ports: !reset []
     container_name: iol-rustfs-1
+    hostname: rustfs
     entrypoint: ["/bin/sh", "/opt/iol/secure-entrypoint.sh"]
-    command: ["https://rustfs:9000/data", "https://rustfs-2:9000/data", "https://rustfs-3:9000/data", "https://rustfs-4:9000/data"]
+    command: ["/data"]
     environment: *rustfs-environment
     volumes:
       - rustfs_1_data:/data
@@ -719,8 +745,13 @@ services:
     security_opt: ["no-new-privileges:true"]
 
   rustfs-2:
+    # Un cluster distribue se deploie sur plusieurs hotes. Il reste disponible
+    # uniquement pour cette topologie explicite, jamais dans la stack par
+    # defaut d'un serveur unique.
+    profiles: [rustfs-distributed]
     image: rustfs/rustfs:${RUSTFS_VERSION:-1.0.0-beta.12}
     restart: unless-stopped
+    hostname: rustfs-2
     entrypoint: ["/bin/sh", "/opt/iol/secure-entrypoint.sh"]
     command: ["https://rustfs:9000/data", "https://rustfs-2:9000/data", "https://rustfs-3:9000/data", "https://rustfs-4:9000/data"]
     environment: *rustfs-environment
@@ -741,8 +772,10 @@ services:
     security_opt: ["no-new-privileges:true"]
 
   rustfs-3:
+    profiles: [rustfs-distributed]
     image: rustfs/rustfs:${RUSTFS_VERSION:-1.0.0-beta.12}
     restart: unless-stopped
+    hostname: rustfs-3
     entrypoint: ["/bin/sh", "/opt/iol/secure-entrypoint.sh"]
     command: ["https://rustfs:9000/data", "https://rustfs-2:9000/data", "https://rustfs-3:9000/data", "https://rustfs-4:9000/data"]
     environment: *rustfs-environment
@@ -763,8 +796,10 @@ services:
     security_opt: ["no-new-privileges:true"]
 
   rustfs-4:
+    profiles: [rustfs-distributed]
     image: rustfs/rustfs:${RUSTFS_VERSION:-1.0.0-beta.12}
     restart: unless-stopped
+    hostname: rustfs-4
     entrypoint: ["/bin/sh", "/opt/iol/secure-entrypoint.sh"]
     command: ["https://rustfs:9000/data", "https://rustfs-2:9000/data", "https://rustfs-3:9000/data", "https://rustfs-4:9000/data"]
     environment: *rustfs-environment
@@ -813,11 +848,10 @@ services:
       - ./secrets/runtime-tls/rustfs-lb:/run/tls:ro
     depends_on:
       rustfs: {condition: service_healthy}
-      rustfs-2: {condition: service_healthy}
-      rustfs-3: {condition: service_healthy}
-      rustfs-4: {condition: service_healthy}
     healthcheck:
-      test: ["CMD-SHELL", "wget --ca-certificate=/run/tls/ca.pem -qO- https://rustfs-lb:9000/rustfs-lb-health >/dev/null"]
+      # L'image nginx:alpine utilise le wget BusyBox, qui ne prend pas en
+      # charge --ca-certificate, mais respecte SSL_CERT_FILE.
+      test: ["CMD-SHELL", "SSL_CERT_FILE=/run/tls/ca.pem wget -qO- https://rustfs-lb:9000/rustfs-lb-health >/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 10

@@ -30,8 +30,8 @@ chmod 700 "${SECRETS_DIR}" "${TLS_DIR}" "${CA_PRIVATE_DIR}" "${RUNTIME_DIR}"
 STORE_PASSWORD_FILE="${SECRETS_DIR}/tls-store-password"
 if [[ ! -s "${STORE_PASSWORD_FILE}" ]]; then
   openssl rand -base64 36 | tr -d '\n' > "${STORE_PASSWORD_FILE}"
-  chmod 600 "${STORE_PASSWORD_FILE}"
 fi
+chmod 444 "${STORE_PASSWORD_FILE}"
 STORE_PASSWORD="$(cat "${STORE_PASSWORD_FILE}")"
 
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out "${CA_PRIVATE_DIR}/ca.key"
@@ -133,12 +133,12 @@ chmod 600 "${TLS_DIR}/truststore.p12"
 
 for credential_file in kafka-keystore-password kafka-key-password kafka-truststore-password; do
   printf '%s' "${STORE_PASSWORD}" > "${SECRETS_DIR}/${credential_file}"
-  chmod 600 "${SECRETS_DIR}/${credential_file}"
+  chmod 444 "${SECRETS_DIR}/${credential_file}"
 done
 
 openssl rand -base64 756 | tr -d '\n' > "${SECRETS_DIR}/mongodb-keyfile"
 openssl rand -hex 48 > "${SECRETS_DIR}/spark-auth-secret"
-chmod 400 "${SECRETS_DIR}/mongodb-keyfile" "${SECRETS_DIR}/spark-auth-secret"
+chmod 444 "${SECRETS_DIR}/mongodb-keyfile" "${SECRETS_DIR}/spark-auth-secret"
 
 runtime_bundle() {
   local bundle_name="$1"

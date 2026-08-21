@@ -16,4 +16,8 @@ read_required_secret RUSTFS_ACCESS_KEY "${RUSTFS_ACCESS_KEY_FILE:-/run/secrets/r
 read_required_secret RUSTFS_SECRET_KEY "${RUSTFS_SECRET_KEY_FILE:-/run/secrets/rustfs-root-secret-key}"
 read_required_secret RUSTFS_KMS_VAULT_TOKEN "${RUSTFS_KMS_VAULT_TOKEN_FILE:-/run/secrets/rustfs-vault-token}"
 
+# RustFS interdit qu'une meme option soit fournie a la fois directement et
+# via sa variante *_FILE. Les secrets viennent deja d'etre lus ci-dessus.
+unset RUSTFS_ACCESS_KEY_FILE RUSTFS_SECRET_KEY_FILE RUSTFS_KMS_VAULT_TOKEN_FILE
+
 exec /usr/bin/rustfs server "$@"

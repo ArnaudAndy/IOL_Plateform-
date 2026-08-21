@@ -13,6 +13,11 @@ create_secret() {
   local format="${2:-base64}"
   local path="${SECRETS_DIR}/${name}"
   if [[ -s "${path}" ]]; then
+    # Docker Compose bind-mount les secrets definis avec `file:`. Les services
+    # tournent sous des UID non-root et doivent pouvoir les lire. Le dossier
+    # parent reste en 0700, donc les autres comptes du serveur ne peuvent pas
+    # y acceder.
+    chmod 0444 "${path}"
     printf 'Conserve: %s\n' "${path}"
     return
   fi
@@ -21,8 +26,28 @@ create_secret() {
   else
     openssl rand -base64 48 | tr -d '\n' > "${path}"
   fi
-  chmod 600 "${path}"
+  # Les secrets sont montes en lecture seule dans les conteneurs. Le mode 0444
+  # est necessaire avec Docker Compose local, qui conserve le mode du fichier
+  # source lors du bind mount.
+  chmod 0444 "${path}"
   printf 'Cree: %s\n' "${path}"
+}
+
+# Les fournisseurs IA sont facultatifs. Docker Compose exige cependant que le
+# fichier declare comme secret existe, meme lorsque le fournisseur est desactive.
+# Un fichier vide conserve donc l'assistant IA desactive sans bloquer le
+# demarrage de la plateforme; l'operateur peut y injecter une cle reelle plus
+# tard via son gestionnaire de secrets.
+create_optional_secret_file() {
+  local name="$1"
+  local path="${SECRETS_DIR}/${name}"
+  if [[ ! -e "${path}" ]]; then
+    : > "${path}"
+    printf 'Cree vide (optionnel): %s\n' "${path}"
+  else
+    printf 'Conserve (optionnel): %s\n' "${path}"
+  fi
+  chmod 0444 "${path}"
 }
 
 create_secret postgres-password
@@ -48,6 +73,8 @@ create_secret backup-s3-access-key hex
 create_secret backup-s3-secret-key
 create_secret smtp-password
 create_secret iol-initial-admin-password
+create_optional_secret_file gemini-api-key
+create_optional_secret_file groq-api-key
 
 printf '\nSecrets d infrastructure generes.\n'
 printf 'Provisionnez backup-s3-access-key sur le stockage de sauvegarde avec un droit d ecriture limite au prefixe IOL.\n'

@@ -54,7 +54,7 @@ required_secrets=(
   keycloak-pipeline-client-secret keycloak-mediator-client-secret
   keycloak-openhim-client-secret iol-initial-admin-password
   openhim-mediator-password openhim-inbound-client-password
-  gemini-api-key groq-api-key smtp-password iol-restic-password
+  smtp-password iol-restic-password
   backup-s3-access-key backup-s3-secret-key
 )
 for secret_name in "${required_secrets[@]}"; do

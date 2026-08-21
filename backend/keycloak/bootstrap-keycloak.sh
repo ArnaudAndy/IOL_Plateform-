@@ -29,13 +29,14 @@ ADMIN_PASSWORD="$(read_secret "${KEYCLOAK_ADMIN_PASSWORD_FILE:-/run/secrets/keyc
 
 if [[ -n "${IOL_TLS_STORE_PASSWORD_FILE:-}" ]]; then
   TLS_STORE_PASSWORD="$(read_secret "${IOL_TLS_STORE_PASSWORD_FILE}")"
-  JAVA_OPTS_APPEND="${JAVA_OPTS_APPEND:-} -Djavax.net.ssl.keyStore=/run/tls/keycloak.p12"
-  JAVA_OPTS_APPEND+=" -Djavax.net.ssl.keyStoreType=PKCS12"
-  JAVA_OPTS_APPEND+=" -Djavax.net.ssl.keyStorePassword=${TLS_STORE_PASSWORD}"
-  JAVA_OPTS_APPEND+=" -Djavax.net.ssl.trustStore=/run/tls/truststore.p12"
-  JAVA_OPTS_APPEND+=" -Djavax.net.ssl.trustStoreType=PKCS12"
-  JAVA_OPTS_APPEND+=" -Djavax.net.ssl.trustStorePassword=${TLS_STORE_PASSWORD}"
-  export JAVA_OPTS_APPEND
+  # kcadm.sh launches Java with KC_OPTS (not JAVA_OPTS_APPEND).
+  KC_OPTS="${KC_OPTS:-} -Djavax.net.ssl.keyStore=/run/tls/keycloak.p12"
+  KC_OPTS+=" -Djavax.net.ssl.keyStoreType=PKCS12"
+  KC_OPTS+=" -Djavax.net.ssl.keyStorePassword=${TLS_STORE_PASSWORD}"
+  KC_OPTS+=" -Djavax.net.ssl.trustStore=/run/tls/truststore.p12"
+  KC_OPTS+=" -Djavax.net.ssl.trustStoreType=PKCS12"
+  KC_OPTS+=" -Djavax.net.ssl.trustStorePassword=${TLS_STORE_PASSWORD}"
+  export KC_OPTS
 fi
 
 for _ in $(seq 1 90); do

@@ -29,6 +29,16 @@ read_secret KAFKA_SSL_KEYSTORE_PASSWORD "${KAFKA_SSL_KEYSTORE_PASSWORD_FILE:-}"
 read_secret KAFKA_SSL_KEY_PASSWORD "${KAFKA_SSL_KEY_PASSWORD_FILE:-}"
 read_secret KAFKA_SSL_TRUSTSTORE_PASSWORD "${KAFKA_SSL_TRUSTSTORE_PASSWORD_FILE:-}"
 
+# Le mot de passe MongoDB est produit comme un secret aleatoire : il peut
+# contenir +, / ou =. Il doit donc etre encode dans une URI. Compose conserve
+# volontairement le marqueur ${MONGODB_PASSWORD} jusqu'au demarrage pour que
+# le mot de passe ne quitte jamais le fichier secret.
+if [ -n "${MONGODB_URI:-}" ] && [ -n "${MONGODB_PASSWORD:-}" ]; then
+  mongodb_password_encoded="$(printf '%s' "${MONGODB_PASSWORD}" | od -An -tx1 | tr -d ' \n' | sed 's/../%&/g')"
+  MONGODB_URI="$(printf '%s\n' "${MONGODB_URI}" | awk -v encoded="${mongodb_password_encoded}" '{ gsub(/\$\{MONGODB_PASSWORD\}/, encoded); print }')"
+  export MONGODB_URI
+fi
+
 if [ -n "${IOL_TLS_KEYSTORE_PATH:-}" ] && [ -n "${API_TLS_KEYSTORE_PASSWORD:-}" ]; then
   JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} -Djavax.net.ssl.keyStore=${IOL_TLS_KEYSTORE_PATH}"
   JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS} -Djavax.net.ssl.keyStoreType=PKCS12"
